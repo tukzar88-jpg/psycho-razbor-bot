@@ -76,10 +76,15 @@ keyboard = [
     ["❤️ Отношения", "😰 Тревога и стресс"],
     ["🧪 Психологический тест"],
     ["⚙️ Мой профиль"],
+    ["📚 Мои разборы"],
 ]
 
 profile_keyboard = [
     ["✏️ Изменить профиль"],
+    ["⬅️ Главное меню"],
+]
+
+history_keyboard = [
     ["⬅️ Главное меню"],
 ]
 
@@ -99,7 +104,7 @@ profile_cache = {}
 
 
 # ============================================================
-# SUPABASE — ПОЛУЧЕНИЕ ПРОФИЛЯ
+# SUPABASE — ПРОФИЛЬ
 # ============================================================
 
 def get_user_profile(user_id):
@@ -120,7 +125,7 @@ def get_user_profile(user_id):
             .execute()
         )
 
-        if result.data and len(result.data) > 0:
+        if result.data:
             return result.data[0]
 
         return None
@@ -128,16 +133,12 @@ def get_user_profile(user_id):
     except Exception:
 
         logging.exception(
-            "Ошибка получения профиля пользователя %s",
+            "Ошибка получения профиля %s",
             user_id
         )
 
         return None
 
-
-# ============================================================
-# SUPABASE — СОХРАНЕНИЕ ПРОФИЛЯ
-# ============================================================
 
 def save_user_profile(
     user_id,
@@ -153,38 +154,23 @@ def save_user_profile(
         "gender": gender,
     }
 
-    try:
-
-        result = (
-            supabase
-            .table("users")
-            .upsert(
-                data,
-                on_conflict="telegram_id"
-            )
-            .execute()
+    result = (
+        supabase
+        .table("users")
+        .upsert(
+            data,
+            on_conflict="telegram_id"
         )
+        .execute()
+    )
 
-        logging.info(
-            "Профиль %s сохранён в Supabase",
-            user_id
-        )
+    logging.info(
+        "Профиль %s сохранён",
+        user_id
+    )
 
-        return result.data
+    return result.data
 
-    except Exception:
-
-        logging.exception(
-            "Ошибка сохранения профиля %s",
-            user_id
-        )
-
-        raise
-
-
-# ============================================================
-# ПРОВЕРКА ПРОФИЛЯ
-# ============================================================
 
 def profile_complete(profile):
 
@@ -196,8 +182,82 @@ def profile_complete(profile):
         and str(profile.get("name")).strip() != ""
         and profile.get("age") is not None
         and profile.get("gender") is not None
-        and str(profile.get("gender")).strip() != ""
     )
+
+
+# ============================================================
+# СОХРАНЕНИЕ РАЗБОРА
+# ============================================================
+
+def save_analysis(
+    user_id,
+    analysis_type,
+    user_message,
+    result
+):
+
+    try:
+
+        data = {
+            "telegram_id": user_id,
+            "analysis_type": analysis_type,
+            "user_message": user_message[:10000],
+            "result": result[:30000],
+        }
+
+        supabase \
+            .table("analyses") \
+            .insert(data) \
+            .execute()
+
+        logging.info(
+            "Разбор сохранён: user=%s type=%s",
+            user_id,
+            analysis_type
+        )
+
+    except Exception:
+
+        logging.exception(
+            "Ошибка сохранения разбора"
+        )
+
+
+# ============================================================
+# ПОЛУЧЕНИЕ ИСТОРИИ
+# ============================================================
+
+def get_analysis_history(user_id):
+
+    try:
+
+        result = (
+            supabase
+            .table("analyses")
+            .select(
+                "id, analysis_type, result, created_at"
+            )
+            .eq(
+                "telegram_id",
+                user_id
+            )
+            .order(
+                "created_at",
+                desc=True
+            )
+            .limit(10)
+            .execute()
+        )
+
+        return result.data or []
+
+    except Exception:
+
+        logging.exception(
+            "Ошибка получения истории"
+        )
+
+        return []
 
 
 # ============================================================
@@ -269,25 +329,20 @@ def get_profile_text(profile):
     if not profile:
         return ""
 
-    name = profile.get("name", "")
-    age = profile.get("age", "")
-    gender = profile.get("gender", "")
-
     return (
         "\n\n"
         "ПРОФИЛЬ ПОЛЬЗОВАТЕЛЯ:\n"
-        f"Имя: {name}\n"
-        f"Возраст: {age}\n"
-        f"Пол: {gender}\n\n"
-        "Учитывай этот профиль при анализе. "
-        "Возраст, имя и пол могут использоваться "
-        "для контекста, но не делай необоснованных "
-        "выводов только на основании этих данных.\n"
+        f"Имя: {profile.get('name', '')}\n"
+        f"Возраст: {profile.get('age', '')}\n"
+        f"Пол: {profile.get('gender', '')}\n\n"
+        "Учитывай профиль при анализе. "
+        "Не делай необоснованных выводов только "
+        "на основании возраста или пола.\n"
     )
 
 
 # ============================================================
-# ОСНОВНОЙ ПРОМПТ
+# SYSTEM PROMPT
 # ============================================================
 
 SYSTEM_PROMPT = """
@@ -345,7 +400,7 @@ __
 
 
 # ============================================================
-# РАЗБОР ПЕРЕПИСКИ
+# ПРОМПТЫ
 # ============================================================
 
 CHAT_PROMPT = """
@@ -407,10 +462,6 @@ CHAT_PROMPT = """
 """
 
 
-# ============================================================
-# СКРИНШОТ
-# ============================================================
-
 SCREENSHOT_PROMPT = """
 На изображении находится переписка между людьми.
 
@@ -432,7 +483,6 @@ SCREENSHOT_PROMPT = """
 💬 ИНИЦИАТИВА
 
 Определи:
-
 • кто чаще пишет первым;
 • кто задаёт вопросы;
 • кто поддерживает разговор;
@@ -442,9 +492,7 @@ SCREENSHOT_PROMPT = """
 
 🟢 ПРИЗНАКИ ИНТЕРЕСА
 
-Укажи конкретные сообщения
-или особенности переписки,
-которые могут говорить об интересе.
+Укажи конкретные сообщения.
 
 🔴 ЧТО НАСТОРАЖИВАЕТ
 
@@ -454,9 +502,6 @@ SCREENSHOT_PROMPT = """
 🧠 ЧТО, СКОРЕЕ ВСЕГО, ПРОИСХОДИТ
 
 Дай наиболее вероятное объяснение.
-
-Важно:
-ты не можешь точно знать мысли человека.
 
 🎯 ЧТО ДЕЛАТЬ
 
@@ -472,16 +517,8 @@ SCREENSHOT_PROMPT = """
 
 Не придумывай сообщения,
 которых нет на изображении.
-
-Если изображение слишком маленькое,
-обрезано или плохо читается,
-честно сообщи об этом.
 """
 
-
-# ============================================================
-# СИТУАЦИЯ
-# ============================================================
 
 SITUATION_PROMPT = """
 Пользователь описал ситуацию.
@@ -490,32 +527,17 @@ SITUATION_PROMPT = """
 
 🔎 ЧТО ПРОИСХОДИТ
 
-Кратко объясни ситуацию.
-
 🧠 ВОЗМОЖНЫЕ ПРИЧИНЫ
-
-Дай несколько наиболее вероятных объяснений.
 
 ⚠️ ЧТО НАСТОРАЖИВАЕТ
 
-Укажи возможные проблемные моменты.
-
 🎯 ЧТО ДЕЛАТЬ
 
-Дай конкретные действия.
-
 ✍️ ЧТО МОЖНО СКАЗАТЬ
-
-Если нужен разговор или сообщение,
-предложи конкретный вариант.
 
 Не выдавай предположения за факты.
 """
 
-
-# ============================================================
-# ОТНОШЕНИЯ
-# ============================================================
 
 RELATIONSHIP_PROMPT = """
 Пользователь рассказал о проблеме в отношениях.
@@ -535,23 +557,13 @@ RELATIONSHIP_PROMPT = """
 ✍️ ЧТО МОЖНО НАПИСАТЬ
 
 Давай конкретные рекомендации.
-
-Не ставь диагнозы.
-Не утверждай, что точно знаешь мысли
-другого человека.
 """
 
-
-# ============================================================
-# ТРЕВОГА
-# ============================================================
 
 STRESS_PROMPT = """
 Пользователь рассказал о тревоге или стрессе.
 
 Ответь спокойно и практично.
-
-Используй:
 
 😰 ЧТО ПРОИСХОДИТ
 
@@ -573,9 +585,7 @@ async def show_main_menu(update):
 
     await update.message.reply_text(
         "🧠 ПСИХОРАЗБОР\n\n"
-        "Разберём переписку, скриншот, "
-        "отношения или ситуацию.\n\n"
-        "Выбирай 👇",
+        "Выбирай нужный раздел 👇",
 
         reply_markup=ReplyKeyboardMarkup(
             keyboard,
@@ -585,7 +595,7 @@ async def show_main_menu(update):
 
 
 # ============================================================
-# РЕГИСТРАЦИЯ
+# ПРОФИЛЬ
 # ============================================================
 
 async def start_profile(update):
@@ -593,19 +603,13 @@ async def start_profile(update):
     user_id = update.effective_user.id
 
     user_profile_steps[user_id] = "name"
-
     profile_cache[user_id] = {}
 
     await update.message.reply_text(
-        "👋 Привет!\n\n"
-        "Давай сначала немного познакомимся.\n\n"
+        "👋 Давай сначала немного познакомимся.\n\n"
         "Как тебя зовут?"
     )
 
-
-# ============================================================
-# ПОКАЗ ПРОФИЛЯ
-# ============================================================
 
 async def show_profile(update):
 
@@ -616,20 +620,15 @@ async def show_profile(update):
     if not profile_complete(profile):
 
         await start_profile(update)
-
         return
-
-    name = profile.get("name", "не указано")
-    age = profile.get("age", "не указано")
-    gender = profile.get("gender", "не указан")
 
     await update.message.reply_text(
         "⚙️ ТВОЙ ПРОФИЛЬ\n\n"
-        f"👤 Имя: {name}\n"
-        f"🎂 Возраст: {age}\n"
-        f"🚻 Пол: {gender}\n\n"
-        "Эти данные используются для персонализации "
-        "анализа переписок и ситуаций.",
+        f"👤 Имя: {profile.get('name')}\n"
+        f"🎂 Возраст: {profile.get('age')}\n"
+        f"🚻 Пол: {profile.get('gender')}\n\n"
+        "Профиль используется для персонализации "
+        "твоих разборов.",
 
         reply_markup=ReplyKeyboardMarkup(
             profile_keyboard,
@@ -638,26 +637,21 @@ async def show_profile(update):
     )
 
 
-# ============================================================
-# ИЗМЕНЕНИЕ ПРОФИЛЯ
-# ============================================================
-
 async def edit_profile(update):
 
     user_id = update.effective_user.id
 
     user_profile_steps[user_id] = "name"
-
     profile_cache[user_id] = {}
 
     await update.message.reply_text(
-        "✏️ Давай изменим твой профиль.\n\n"
+        "✏️ Давай изменим профиль.\n\n"
         "Как тебя зовут?"
     )
 
 
 # ============================================================
-# ОБРАБОТКА ПРОФИЛЯ
+# ПРОФИЛЬ — ВВОД
 # ============================================================
 
 async def handle_profile_input(
@@ -666,16 +660,11 @@ async def handle_profile_input(
 ):
 
     user_id = update.effective_user.id
-
     step = user_profile_steps.get(user_id)
 
     if not step:
         return False
 
-
-    # ========================================================
-    # ИМЯ
-    # ========================================================
 
     if step == "name":
 
@@ -685,15 +674,6 @@ async def handle_profile_input(
 
             await update.message.reply_text(
                 "Напиши имя чуть подробнее 🙂"
-            )
-
-            return True
-
-        if len(name) > 40:
-
-            await update.message.reply_text(
-                "Имя слишком длинное. "
-                "Напиши, пожалуйста, короче."
             )
 
             return True
@@ -712,18 +692,10 @@ async def handle_profile_input(
         return True
 
 
-    # ========================================================
-    # ВОЗРАСТ
-    # ========================================================
-
     if step == "age":
 
         try:
-
-            age = int(
-                text.strip()
-            )
-
+            age = int(text.strip())
         except ValueError:
 
             await update.message.reply_text(
@@ -757,10 +729,6 @@ async def handle_profile_input(
         return True
 
 
-    # ========================================================
-    # ПОЛ
-    # ========================================================
-
     if step == "gender":
 
         gender_map = {
@@ -778,8 +746,7 @@ async def handle_profile_input(
 
                 reply_markup=ReplyKeyboardMarkup(
                     gender_keyboard,
-                    resize_keyboard=True,
-                    one_time_keyboard=True
+                    resize_keyboard=True
                 )
             )
 
@@ -792,18 +759,16 @@ async def handle_profile_input(
         try:
 
             save_user_profile(
-                user_id=user_id,
-                name=data["name"],
-                age=data["age"],
-                gender=data["gender"]
+                user_id,
+                data["name"],
+                data["age"],
+                data["gender"]
             )
 
         except Exception:
 
             await update.message.reply_text(
-                "❌ Не удалось сохранить профиль.\n\n"
-                "Проверь подключение Supabase "
-                "и попробуй ещё раз."
+                "❌ Не удалось сохранить профиль."
             )
 
             return True
@@ -821,10 +786,7 @@ async def handle_profile_input(
         user_modes[user_id] = None
 
         await update.message.reply_text(
-            "✅ Профиль сохранён!\n\n"
-            "Теперь данные будут храниться "
-            "в Supabase и не пропадут после "
-            "перезапуска бота."
+            "✅ Профиль сохранён!"
         )
 
         await show_main_menu(update)
@@ -832,6 +794,78 @@ async def handle_profile_input(
         return True
 
     return False
+
+
+# ============================================================
+# ИСТОРИЯ
+# ============================================================
+
+def get_analysis_type_name(
+    analysis_type
+):
+
+    names = {
+        "chat": "💬 Разбор переписки",
+        "screenshot": "📸 Анализ скриншота",
+        "situation": "🧠 Разбор ситуации",
+        "relationship": "❤️ Отношения",
+        "stress": "😰 Тревога и стресс",
+    }
+
+    return names.get(
+        analysis_type,
+        "🧠 Анализ"
+    )
+
+
+async def show_history(update):
+
+    user_id = update.effective_user.id
+
+    history = get_analysis_history(user_id)
+
+    if not history:
+
+        await update.message.reply_text(
+            "📚 У тебя пока нет сохранённых разборов.\n\n"
+            "Сделай первый анализ — и он появится здесь."
+        )
+
+        return
+
+    await update.message.reply_text(
+        "📚 ТВОИ ПОСЛЕДНИЕ РАЗБОРЫ\n\n"
+        "Показываю последние 10."
+    )
+
+    for item in history:
+
+        analysis_type = get_analysis_type_name(
+            item.get("analysis_type")
+        )
+
+        created_at = item.get(
+            "created_at",
+            ""
+        )
+
+        result = item.get(
+            "result",
+            ""
+        )
+
+        if len(result) > 2500:
+            result = result[:2500] + "\n\n…"
+
+        message = (
+            f"{analysis_type}\n"
+            f"🕐 {created_at}\n\n"
+            f"{result}"
+        )
+
+        await update.message.reply_text(
+            clean_markdown(message)
+        )
 
 
 # ============================================================
@@ -930,6 +964,13 @@ async def handle_photo(
 
         answer = clean_markdown(answer)
 
+        save_analysis(
+            user_id,
+            "screenshot",
+            "[Скриншот переписки]",
+            answer
+        )
+
         for i in range(
             0,
             len(answer),
@@ -962,7 +1003,6 @@ async def handle_message(
 ):
 
     user_id = update.effective_user.id
-
     text = update.message.text.strip()
 
 
@@ -981,7 +1021,7 @@ async def handle_message(
 
 
     # ========================================================
-    # МОЙ ПРОФИЛЬ
+    # ПРОФИЛЬ
     # ========================================================
 
     if text == "⚙️ Мой профиль":
@@ -991,13 +1031,20 @@ async def handle_message(
         return
 
 
-    # ========================================================
-    # ИЗМЕНИТЬ ПРОФИЛЬ
-    # ========================================================
-
     if text == "✏️ Изменить профиль":
 
         await edit_profile(update)
+
+        return
+
+
+    # ========================================================
+    # ИСТОРИЯ
+    # ========================================================
+
+    if text == "📚 Мои разборы":
+
+        await show_history(update)
 
         return
 
@@ -1024,9 +1071,7 @@ async def handle_message(
         user_modes[user_id] = "chat"
 
         await update.message.reply_text(
-            "💬 Пришли переписку целиком.\n\n"
-            "Можно просто скопировать сообщения "
-            "и отправить их сюда."
+            "💬 Пришли переписку целиком."
         )
 
         return
@@ -1087,7 +1132,7 @@ async def handle_message(
         user_modes[user_id] = "stress"
 
         await update.message.reply_text(
-            "😰 Расскажи, что тебя сейчас беспокоит."
+            "😰 Расскажи, что тебя беспокоит."
         )
 
         return
@@ -1107,7 +1152,7 @@ async def handle_message(
 
 
     # ========================================================
-    # ПРОВЕРКА РЕЖИМА
+    # РЕЖИМ
     # ========================================================
 
     mode = user_modes.get(user_id)
@@ -1154,19 +1199,15 @@ async def handle_message(
     # ========================================================
 
     if mode == "chat":
-
         task = CHAT_PROMPT
 
     elif mode == "situation":
-
         task = SITUATION_PROMPT
 
     elif mode == "relationship":
-
         task = RELATIONSHIP_PROMPT
 
     else:
-
         task = STRESS_PROMPT
 
 
@@ -1202,6 +1243,23 @@ async def handle_message(
 
         answer = clean_markdown(answer)
 
+
+        # ====================================================
+        # СОХРАНЯЕМ В ИСТОРИЮ
+        # ====================================================
+
+        save_analysis(
+            user_id,
+            mode,
+            text,
+            answer
+        )
+
+
+        # ====================================================
+        # ОТПРАВЛЯЕМ
+        # ====================================================
+
         for i in range(
             0,
             len(answer),
@@ -1225,7 +1283,7 @@ async def handle_message(
 
 
 # ============================================================
-# КОМАНДА PROFILE
+# PROFILE COMMAND
 # ============================================================
 
 async def profile_command(
@@ -1234,6 +1292,18 @@ async def profile_command(
 ):
 
     await show_profile(update)
+
+
+# ============================================================
+# HISTORY COMMAND
+# ============================================================
+
+async def history_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+
+    await show_history(update)
 
 
 # ============================================================
@@ -1250,12 +1320,14 @@ def main():
         TELEGRAM_TOKEN
     ).build()
 
+
     app.add_handler(
         CommandHandler(
             "start",
             start
         )
     )
+
 
     app.add_handler(
         CommandHandler(
@@ -1264,6 +1336,15 @@ def main():
         )
     )
 
+
+    app.add_handler(
+        CommandHandler(
+            "history",
+            history_command
+        )
+    )
+
+
     app.add_handler(
         MessageHandler(
             filters.PHOTO,
@@ -1271,12 +1352,14 @@ def main():
         )
     )
 
+
     app.add_handler(
         MessageHandler(
             filters.TEXT & ~filters.COMMAND,
             handle_message
         )
     )
+
 
     print(
         "🟢 ПСИХОРАЗБОР успешно запущен."
