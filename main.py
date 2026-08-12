@@ -1,7 +1,10 @@
 import os
 import logging
+import io
 
 from google import genai
+from google.genai import types
+
 from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import (
     Application,
@@ -11,7 +14,15 @@ from telegram.ext import (
     filters,
 )
 
-logging.basicConfig(level=logging.INFO)
+
+# =========================
+# НАСТРОЙКИ
+# =========================
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s"
+)
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
@@ -22,12 +33,21 @@ if not TELEGRAM_TOKEN:
 if not GEMINI_API_KEY:
     raise RuntimeError("GEMINI_API_KEY не задан")
 
-client = genai.Client(api_key=GEMINI_API_KEY)
+
+client = genai.Client(
+    api_key=GEMINI_API_KEY
+)
 
 MODEL = "gemini-3.6-flash"
 
+
+# =========================
+# МЕНЮ
+# =========================
+
 keyboard = [
     ["💬 Разбор переписки"],
+    ["📸 Анализ скриншота"],
     ["🧠 Разбор ситуации"],
     ["❤️ Отношения", "😰 Тревога и стресс"],
     ["🧪 Психологический тест"],
@@ -36,40 +56,42 @@ keyboard = [
 user_modes = {}
 
 
+# =========================
+# ОСНОВНОЙ ПРОМПТ
+# =========================
+
 SYSTEM_PROMPT = """
-Ты — ПСИХОРАЗБОР, AI-помощник по отношениям,
-перепискам и жизненным ситуациям.
+Ты — ПСИХОРАЗБОР.
 
-Твоя задача — давать человеку понятный,
-честный и практически полезный анализ.
+Ты умный, прямой и эмпатичный AI-помощник
+по отношениям, перепискам и жизненным ситуациям.
 
-Правила:
+Твоя задача — помогать человеку понять происходящее
+и давать конкретные практические рекомендации.
 
-- Не ставь медицинские или психиатрические диагнозы.
+ВАЖНЫЕ ПРАВИЛА:
+
+- Не ставь медицинских или психиатрических диагнозов.
 - Не утверждай, что точно знаешь мысли другого человека.
 - Отделяй факты от предположений.
 - Не придумывай отсутствующие факты.
-- Если информации мало — скажи об этом.
+- Если информации недостаточно — скажи об этом.
 - Не поддерживай опасное или токсичное поведение.
+- Не читай пользователю мораль.
 - Отвечай живым человеческим языком.
-- Не пиши огромные лекции.
-- Давай конкретные действия.
 
-Используй формулировки:
-"возможно",
-"скорее всего",
-"одна из причин",
-"по имеющейся информации".
-
-Главная цель — помочь человеку понять ситуацию
-и решить, что делать дальше.
+Главная цель — дать человеку практическую пользу.
 """
 
+
+# =========================
+# РАЗБОР ТЕКСТОВОЙ ПЕРЕПИСКИ
+# =========================
 
 CHAT_PROMPT = """
 Пользователь прислал переписку.
 
-Сделай разбор в следующем формате:
+Сделай разбор:
 
 🔥 РАЗБОР ПЕРЕПИСКИ
 
@@ -114,10 +136,88 @@ CHAT_PROMPT = """
 """
 
 
+# =========================
+# РАЗБОР СКРИНШОТА
+# =========================
+
+SCREENSHOT_PROMPT = """
+На изображении находится переписка между людьми.
+
+Твоя задача — внимательно изучить изображение
+и сделать психологический анализ переписки.
+
+Сначала самостоятельно прочитай сообщения
+на изображении.
+
+Если часть текста плохо читается,
+не придумывай его.
+
+Используй структуру:
+
+🔥 РАЗБОР СКРИНШОТА
+
+📊 ИНТЕРЕС: X/10
+
+Оцени уровень заинтересованности
+по поведению и сообщениям.
+
+💬 ИНИЦИАТИВА
+
+Определи:
+- кто чаще пишет первым;
+- кто задаёт вопросы;
+- кто поддерживает разговор;
+- кто пытается продолжить общение;
+- кто предлагает встречу или контакт.
+
+🟢 ПРИЗНАКИ ИНТЕРЕСА
+
+Укажи конкретные сообщения или особенности
+переписки, которые могут говорить об интересе.
+
+🔴 ЧТО НАСТОРАЖИВАЕТ
+
+Укажи признаки дистанции,
+холодности или слабой инициативы.
+
+🧠 ЧТО, СКОРЕЕ ВСЕГО, ПРОИСХОДИТ
+
+Дай наиболее вероятное объяснение.
+
+Помни:
+ты не можешь точно знать мысли человека.
+
+🎯 ЧТО ДЕЛАТЬ
+
+Дай конкретные рекомендации.
+
+✍️ ЧТО НАПИСАТЬ
+
+Предложи три варианта:
+
+1. Спокойный
+2. Уверенный
+3. Дерзкий
+
+ВАЖНО:
+
+Не придумывай сообщения,
+которых нет на изображении.
+
+Если скриншот слишком маленький,
+обрезан или плохо читается,
+честно сообщи об этом.
+"""
+
+
+# =========================
+# СИТУАЦИЯ
+# =========================
+
 SITUATION_PROMPT = """
 Пользователь описал ситуацию.
 
-Сделай разбор:
+Разбери:
 
 🔎 ЧТО ПРОИСХОДИТ
 
@@ -133,10 +233,12 @@ SITUATION_PROMPT = """
 """
 
 
+# =========================
+# ОТНОШЕНИЯ
+# =========================
+
 RELATIONSHIP_PROMPT = """
 Разбери ситуацию в отношениях.
-
-Используй:
 
 ❤️ ЧТО ПРОИСХОДИТ
 
@@ -149,13 +251,17 @@ RELATIONSHIP_PROMPT = """
 🎯 ЧТО ДЕЛАТЬ ДАЛЬШЕ
 
 ✍️ ЧТО МОЖНО НАПИСАТЬ
+
+Не утверждай, что точно знаешь мысли другого человека.
 """
 
 
+# =========================
+# ТРЕВОГА
+# =========================
+
 STRESS_PROMPT = """
 Помоги пользователю разобраться со стрессом.
-
-Используй:
 
 😰 ЧТО ПРОИСХОДИТ
 
@@ -169,14 +275,25 @@ STRESS_PROMPT = """
 """
 
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_modes[update.effective_user.id] = None
+# =========================
+# START
+# =========================
+
+async def start(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+
+    user_id = update.effective_user.id
+
+    user_modes[user_id] = None
 
     await update.message.reply_text(
         "🧠 ПСИХОРАЗБОР\n\n"
-        "Разберём переписку, отношения "
-        "или сложную ситуацию.\n\n"
+        "Разберём переписку, скриншот, "
+        "отношения или ситуацию.\n\n"
         "Выбирай 👇",
+
         reply_markup=ReplyKeyboardMarkup(
             keyboard,
             resize_keyboard=True
@@ -184,87 +301,49 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-async def handle_message(
+# =========================
+# ОБРАБОТКА ФОТО
+# =========================
+
+async def handle_photo(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE
 ):
+
     user_id = update.effective_user.id
-    text = update.message.text
-
-    if text == "💬 Разбор переписки":
-        user_modes[user_id] = "chat"
-
-        await update.message.reply_text(
-            "💬 Пришли переписку целиком.\n\n"
-            "Можно просто скопировать сообщения сюда."
-        )
-        return
-
-    if text == "🧠 Разбор ситуации":
-        user_modes[user_id] = "situation"
-
-        await update.message.reply_text(
-            "🧠 Опиши ситуацию своими словами."
-        )
-        return
-
-    if text == "❤️ Отношения":
-        user_modes[user_id] = "relationship"
-
-        await update.message.reply_text(
-            "❤️ Расскажи, что происходит "
-            "в отношениях."
-        )
-        return
-
-    if text == "😰 Тревога и стресс":
-        user_modes[user_id] = "stress"
-
-        await update.message.reply_text(
-            "😰 Расскажи, что тебя сейчас беспокоит."
-        )
-        return
-
-    if text == "🧪 Психологический тест":
-        await update.message.reply_text(
-            "🧪 Тесты добавим следующим обновлением."
-        )
-        return
-
-    mode = user_modes.get(user_id)
-
-    if not mode:
-        await update.message.reply_text(
-            "Выбери раздел в меню 👇"
-        )
-        return
 
     await update.message.reply_text(
-        "🧠 Анализирую..."
-    )
-
-    if mode == "chat":
-        task = CHAT_PROMPT
-    elif mode == "situation":
-        task = SITUATION_PROMPT
-    elif mode == "relationship":
-        task = RELATIONSHIP_PROMPT
-    else:
-        task = STRESS_PROMPT
-
-    prompt = (
-        SYSTEM_PROMPT
-        + "\n\n"
-        + task
-        + "\n\n"
-        + "СООБЩЕНИЕ ПОЛЬЗОВАТЕЛЯ:\n"
-        + text
+        "📸 Получил скриншот.\n\n"
+        "🧠 Читаю переписку и анализирую..."
     )
 
     try:
+
+        photo = update.message.photo[-1]
+
+        file = await context.bot.get_file(
+            photo.file_id
+        )
+
+        image_bytes = await file.download_as_bytearray()
+
+        image_part = types.Part.from_bytes(
+            data=bytes(image_bytes),
+            mime_type="image/jpeg"
+        )
+
+        prompt = (
+            SYSTEM_PROMPT
+            + "\n\n"
+            + SCREENSHOT_PROMPT
+        )
+
         response = client.interactions.create(
             model=MODEL,
-            input=prompt
+            input=[
+                prompt,
+                image_part
+            ]
         )
 
         answer = response.output_text
@@ -275,12 +354,225 @@ async def handle_message(
             )
 
         for i in range(0, len(answer), 4000):
+
             await update.message.reply_text(
                 answer[i:i + 4000]
             )
 
     except Exception as e:
-        logging.exception("Gemini error")
+
+        logging.exception(
+            "Ошибка анализа изображения"
+        )
+
+        await update.message.reply_text(
+            "❌ Ошибка при анализе скриншота:\n\n"
+            + str(e)[:3000]
+        )
+
+
+# =========================
+# ТЕКСТОВЫЕ СООБЩЕНИЯ
+# =========================
+
+async def handle_message(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+
+    user_id = update.effective_user.id
+
+    text = update.message.text
+
+
+    # -------------------------
+    # ПЕРЕПИСКА
+    # -------------------------
+
+    if text == "💬 Разбор переписки":
+
+        user_modes[user_id] = "chat"
+
+        await update.message.reply_text(
+            "💬 Пришли переписку целиком.\n\n"
+            "Можно просто скопировать сообщения сюда."
+        )
+
+        return
+
+
+    # -------------------------
+    # СКРИНШОТ
+    # -------------------------
+
+    if text == "📸 Анализ скриншота":
+
+        user_modes[user_id] = "screenshot"
+
+        await update.message.reply_text(
+            "📸 Пришли скриншот переписки.\n\n"
+            "Я попробую прочитать сообщения "
+            "и определить интерес, инициативу "
+            "и проблемные моменты."
+        )
+
+        return
+
+
+    # -------------------------
+    # СИТУАЦИЯ
+    # -------------------------
+
+    if text == "🧠 Разбор ситуации":
+
+        user_modes[user_id] = "situation"
+
+        await update.message.reply_text(
+            "🧠 Опиши ситуацию своими словами."
+        )
+
+        return
+
+
+    # -------------------------
+    # ОТНОШЕНИЯ
+    # -------------------------
+
+    if text == "❤️ Отношения":
+
+        user_modes[user_id] = "relationship"
+
+        await update.message.reply_text(
+            "❤️ Расскажи, что происходит "
+            "в отношениях."
+        )
+
+        return
+
+
+    # -------------------------
+    # ТРЕВОГА
+    # -------------------------
+
+    if text == "😰 Тревога и стресс":
+
+        user_modes[user_id] = "stress"
+
+        await update.message.reply_text(
+            "😰 Расскажи, что тебя беспокоит."
+        )
+
+        return
+
+
+    # -------------------------
+    # ТЕСТ
+    # -------------------------
+
+    if text == "🧪 Психологический тест":
+
+        await update.message.reply_text(
+            "🧪 Тесты добавим следующим обновлением."
+        )
+
+        return
+
+
+    # -------------------------
+    # РЕЖИМ
+    # -------------------------
+
+    mode = user_modes.get(user_id)
+
+    if not mode:
+
+        await update.message.reply_text(
+            "Выбери раздел в меню 👇"
+        )
+
+        return
+
+
+    # -------------------------
+    # ПРОВЕРКА
+    # -------------------------
+
+    if mode == "screenshot":
+
+        await update.message.reply_text(
+            "📸 Для этого режима отправь именно "
+            "фотографию или скриншот."
+        )
+
+        return
+
+
+    await update.message.reply_text(
+        "🧠 Анализирую..."
+    )
+
+
+    # -------------------------
+    # ПРОМПТ
+    # -------------------------
+
+    if mode == "chat":
+
+        task = CHAT_PROMPT
+
+    elif mode == "situation":
+
+        task = SITUATION_PROMPT
+
+    elif mode == "relationship":
+
+        task = RELATIONSHIP_PROMPT
+
+    else:
+
+        task = STRESS_PROMPT
+
+
+    prompt = (
+        SYSTEM_PROMPT
+        + "\n\n"
+        + task
+        + "\n\n"
+        + "СООБЩЕНИЕ ПОЛЬЗОВАТЕЛЯ:\n"
+        + text
+    )
+
+
+    # -------------------------
+    # GEMINI
+    # -------------------------
+
+    try:
+
+        response = client.interactions.create(
+            model=MODEL,
+            input=prompt
+        )
+
+        answer = response.output_text
+
+        if not answer:
+
+            raise RuntimeError(
+                "Gemini вернул пустой ответ"
+            )
+
+        for i in range(0, len(answer), 4000):
+
+            await update.message.reply_text(
+                answer[i:i + 4000]
+            )
+
+    except Exception as e:
+
+        logging.exception(
+            "Ошибка Gemini"
+        )
 
         await update.message.reply_text(
             "❌ Ошибка Gemini:\n\n"
@@ -288,15 +580,32 @@ async def handle_message(
         )
 
 
+# =========================
+# ЗАПУСК
+# =========================
+
 def main():
-    print("ПСИХОРАЗБОР запускается...")
+
+    print(
+        "ПСИХОРАЗБОР запускается..."
+    )
 
     app = Application.builder().token(
         TELEGRAM_TOKEN
     ).build()
 
     app.add_handler(
-        CommandHandler("start", start)
+        CommandHandler(
+            "start",
+            start
+        )
+    )
+
+    app.add_handler(
+        MessageHandler(
+            filters.PHOTO,
+            handle_photo
+        )
     )
 
     app.add_handler(
@@ -306,7 +615,9 @@ def main():
         )
     )
 
-    print("ПСИХОРАЗБОР запущен.")
+    print(
+        "ПСИХОРАЗБОР запущен."
+    )
 
     app.run_polling()
 
