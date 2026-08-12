@@ -10,6 +10,7 @@ from telegram import (
     Update,
     ReplyKeyboardMarkup,
 )
+
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -17,6 +18,7 @@ from telegram.ext import (
     ContextTypes,
     filters,
 )
+
 
 # ============================================================
 # НАСТРОЙКИ
@@ -34,16 +36,24 @@ SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
 if not TELEGRAM_TOKEN:
-    raise RuntimeError("TELEGRAM_BOT_TOKEN не задан в Railway")
+    raise RuntimeError(
+        "TELEGRAM_BOT_TOKEN не задан в Railway"
+    )
 
 if not GEMINI_API_KEY:
-    raise RuntimeError("GEMINI_API_KEY не задан в Railway")
+    raise RuntimeError(
+        "GEMINI_API_KEY не задан в Railway"
+    )
 
 if not SUPABASE_URL:
-    raise RuntimeError("SUPABASE_URL не задан в Railway")
+    raise RuntimeError(
+        "SUPABASE_URL не задан в Railway"
+    )
 
 if not SUPABASE_KEY:
-    raise RuntimeError("SUPABASE_KEY не задан в Railway")
+    raise RuntimeError(
+        "SUPABASE_KEY не задан в Railway"
+    )
 
 
 # ============================================================
@@ -90,6 +100,7 @@ test_states = {}
 # ============================================================
 
 def main_keyboard():
+
     return ReplyKeyboardMarkup(
         keyboard,
         resize_keyboard=True
@@ -104,10 +115,16 @@ async def send_long_message(
     update: Update,
     text: str
 ):
+
     if not text:
         return
 
-    for i in range(0, len(text), 4000):
+    for i in range(
+        0,
+        len(text),
+        4000
+    ):
+
         await update.message.reply_text(
             text[i:i + 4000]
         )
@@ -155,8 +172,15 @@ def clean_markdown(text):
         text
     )
 
-    text = text.replace("```", "")
-    text = text.replace("`", "")
+    text = text.replace(
+        "```",
+        ""
+    )
+
+    text = text.replace(
+        "`",
+        ""
+    )
 
     text = re.sub(
         r"[ \t]+\n",
@@ -273,14 +297,24 @@ def save_user_profile(
 
 def profile_exists(user_id):
 
-    profile = get_user_profile(user_id)
+    profile = get_user_profile(
+        user_id
+    )
 
     if not profile:
         return False
 
-    name = profile.get("name")
-    age = profile.get("age")
-    gender = profile.get("gender")
+    name = profile.get(
+        "name"
+    )
+
+    age = profile.get(
+        "age"
+    )
+
+    gender = profile.get(
+        "gender"
+    )
 
     return bool(
         name
@@ -295,14 +329,27 @@ def profile_exists(user_id):
 
 def profile_context(user_id):
 
-    profile = get_user_profile(user_id)
+    profile = get_user_profile(
+        user_id
+    )
 
     if not profile:
         return ""
 
-    name = profile.get("name", "")
-    age = profile.get("age", "")
-    gender = profile.get("gender", "")
+    name = profile.get(
+        "name",
+        ""
+    )
+
+    age = profile.get(
+        "age",
+        ""
+    )
+
+    gender = profile.get(
+        "gender",
+        ""
+    )
 
     return (
         "\n\n"
@@ -335,6 +382,7 @@ SYSTEM_PROMPT = """
 - Не утверждай, что точно знаешь мысли другого человека.
 - Отделяй факты от предположений.
 - Не придумывай отсутствующие факты.
+- Если информации недостаточно — скажи об этом.
 - Не поддерживай опасное или токсичное поведение.
 - Не читай пользователю мораль.
 - Отвечай простым человеческим языком.
@@ -624,7 +672,6 @@ RELATIONSHIP_PROMPT = """
 
 Не утверждай, что точно знаешь мысли
 другого человека.
-Не растягивай ответ.
 """
 
 
@@ -707,129 +754,60 @@ def save_analysis(
 
 
 # ============================================================
-# НОВЫЙ ТЕСТ НА СТИЛЬ ПРИВЯЗАННОСТИ
+# ТЕСТ НА ПРИВЯЗАННОСТЬ
+#
+# Структура теста основана на двух измерениях взрослой
+# привязанности: тревожности и избегании.
+#
+# Вопросы ниже сформулированы для бота самостоятельно,
+# а не дословно воспроизводят оригинальный опросник.
 # ============================================================
 
 ATTACHMENT_QUESTIONS = [
-
-    # ТРЕВОЖНОСТЬ
     (
-        "anxious",
-        "Если человек, который мне нравится, "
-        "долго не отвечает, я начинаю переживать."
+        "avoidance",
+        "Мне легко обращаться к близкому человеку за поддержкой, "
+        "когда она мне нужна."
     ),
-
     (
-        "secure",
-        "Я спокойно могу доверять человеку, "
-        "если он показывает поступками, что ему можно доверять."
+        "avoidance",
+        "Я обычно могу открыто говорить близкому человеку "
+        "о своих переживаниях."
     ),
-
     (
-        "avoidant",
-        "Когда человек становится слишком близким, "
-        "мне хочется немного отдалиться."
+        "avoidance",
+        "Мне комфортно полагаться на близкого человека "
+        "в сложных ситуациях."
     ),
-
     (
-        "anxious",
-        "Мне бывает важно часто получать подтверждение, "
-        "что я действительно важен человеку."
+        "avoidance",
+        "Мне легко позволить близкому человеку узнать "
+        "меня по-настоящему."
     ),
-
     (
-        "secure",
-        "Я могу прямо сказать партнёру, "
-        "что мне нравится или не нравится."
+        "avoidance",
+        "Я стараюсь самостоятельно справляться "
+        "с эмоционально тяжёлыми ситуациями."
     ),
-
     (
-        "anxious",
-        "Я могу долго прокручивать в голове ситуацию, "
-        "если человек стал отвечать холоднее."
-    ),
-
-    (
-        "avoidant",
-        "Мне комфортнее рассчитывать на себя, "
-        "чем сильно зависеть от другого человека."
-    ),
-
-    (
-        "secure",
-        "Мне комфортно проводить время отдельно от партнёра, "
-        "не чувствуя угрозы для отношений."
-    ),
-
-    (
-        "anxious",
-        "Если партнёр становится менее внимательным, "
-        "я быстро начинаю думать, что чувства изменились."
-    ),
-
-    (
-        "avoidant",
-        "Мне иногда сложно говорить о своих настоящих чувствах, "
-        "даже близкому человеку."
-    ),
-
-    (
-        "secure",
-        "После конфликта я способен спокойно обсудить проблему, "
-        "а не избегать разговора."
-    ),
-
-    (
-        "anxious",
-        "Мне трудно расслабиться в отношениях, "
-        "если я не уверен в чувствах другого человека."
-    ),
-
-    (
-        "avoidant",
-        "Когда от меня хотят слишком много эмоциональной близости, "
-        "я чувствую давление."
-    ),
-
-    (
-        "secure",
-        "Я могу быть близким с человеком и одновременно "
-        "сохранять свои личные границы."
-    ),
-
-    (
-        "anxious",
-        "Я могу ревновать даже тогда, "
-        "когда у меня нет явных причин."
-    ),
-
-    (
-        "avoidant",
-        "Когда отношения становятся серьёзными, "
-        "мне иногда хочется сохранить дистанцию."
-    ),
-
-    (
-        "secure",
-        "Я могу спокойно говорить партнёру о своих потребностях."
-    ),
-
-    (
-        "anxious",
-        "Мне сложно не думать о человеке, "
-        "если между нами возникла неопределённость."
-    ),
-
-    (
-        "avoidant",
-        "Я стараюсь не показывать человеку, "
+        "avoidance",
+        "Мне бывает некомфортно показывать человеку, "
         "насколько сильно он мне нужен."
     ),
-
     (
-        "secure",
-        "Я считаю нормальным одновременно любить человека, "
-        "доверять ему и иметь собственную жизнь."
+        "anxiety",
+        "Я часто переживаю, что близкий человек "
+        "может потерять ко мне интерес."
+    ),
+    (
+        "anxiety",
+        "Мне важно понимать, что близкий человек "
+        "точно продолжает ценить меня."
+    ),
+    (
+        "anxiety",
+        "Если человек становится холоднее, "
+        "я начинаю переживать и искать причину."
     ),
 ]
 
@@ -837,180 +815,237 @@ ATTACHMENT_QUESTIONS = [
 ATTACHMENT_OPTIONS = [
     ["1️⃣ Совсем не про меня"],
     ["2️⃣ Скорее не про меня"],
-    ["3️⃣ Иногда про меня"],
+    ["3️⃣ Частично про меня"],
     ["4️⃣ Скорее про меня"],
-    ["5️⃣ Очень про меня"]
+    ["5️⃣ Полностью про меня"],
 ]
 
 
 # ============================================================
-# РЕЗУЛЬТАТ ТЕСТА
+# РАСЧЁТ ТЕСТА
 # ============================================================
 
 def attachment_result(answers):
 
-    anxious_scores = []
-    avoidant_scores = []
-    secure_scores = []
+    if len(answers) != len(ATTACHMENT_QUESTIONS):
+
+        raise ValueError(
+            "Неверное количество ответов"
+        )
+
+    avoidance_raw = []
+    anxiety_raw = []
 
     for index, answer in enumerate(answers):
 
-        category = ATTACHMENT_QUESTIONS[index][0]
+        category = ATTACHMENT_QUESTIONS[
+            index
+        ][0]
 
-        if category == "anxious":
-            anxious_scores.append(answer)
+        if category == "avoidance":
 
-        elif category == "avoidant":
-            avoidant_scores.append(answer)
+            # Для первых четырёх вопросов
+            # высокая оценка = больше безопасности.
+            # Поэтому делаем обратный пересчёт.
+            if index < 4:
+                score = 6 - answer
+            else:
+                score = answer
 
-        elif category == "secure":
-            secure_scores.append(answer)
+            avoidance_raw.append(score)
 
-    anxious_percent = round(
-        (
-            sum(anxious_scores)
-            / (len(anxious_scores) * 5)
-        ) * 100
+        elif category == "anxiety":
+
+            anxiety_raw.append(answer)
+
+    # Средние значения на шкале 1–5
+    avoidance_score = (
+        sum(avoidance_raw)
+        / len(avoidance_raw)
     )
 
-    avoidant_percent = round(
-        (
-            sum(avoidant_scores)
-            / (len(avoidant_scores) * 5)
-        ) * 100
+    anxiety_score = (
+        sum(anxiety_raw)
+        / len(anxiety_raw)
     )
 
-    secure_percent = round(
-        (
-            sum(secure_scores)
-            / (len(secure_scores) * 5)
-        ) * 100
+    # Переводим 1–5 в 0–100
+    avoidance_percent = round(
+        ((avoidance_score - 1) / 4) * 100
     )
 
-    # --------------------------------------------------------
-    # ОПРЕДЕЛЕНИЕ ОСНОВНОГО СТИЛЯ
-    # --------------------------------------------------------
+    anxiety_percent = round(
+        ((anxiety_score - 1) / 4) * 100
+    )
+
+    avoidance_percent = max(
+        0,
+        min(100, avoidance_percent)
+    )
+
+    anxiety_percent = max(
+        0,
+        min(100, anxiety_percent)
+    )
+
+    # Индекс относительной безопасности.
+    # Это НЕ отдельная валидированная шкала.
+    security_percent = round(
+        100
+        - (
+            anxiety_percent
+            + avoidance_percent
+        ) / 2
+    )
+
+    security_percent = max(
+        0,
+        min(100, security_percent)
+    )
+
+    # ========================================================
+    # ПРОФИЛЬ
+    # ========================================================
 
     if (
-        anxious_percent >= 65
-        and avoidant_percent >= 60
+        anxiety_score < 3
+        and avoidance_score < 3
     ):
 
-        result_type = "Тревожно-избегающий"
+        result_type = (
+            "Преимущественно надёжный профиль"
+        )
 
         description = (
-            "У тебя одновременно заметны две тенденции: "
-            "сильная потребность в близости и желание "
-            "защитить себя дистанцией. Поэтому в отношениях "
-            "может возникать сценарий «приблизиться — испугаться — "
-            "отдалиться — снова захотеть близости»."
+            "По ответам у тебя относительно невысокие "
+            "тревожность и избегание близости. "
+            "Ты можешь достаточно спокойно принимать "
+            "близость, доверие и личное пространство."
         )
 
         advice = (
-            "Главное — не принимать решения на пике эмоций. "
-            "Старайся сначала понять, чего ты действительно хочешь, "
-            "а потом прямо говорить об этом человеку."
+            "Сохраняй открытое общение и продолжай "
+            "прямо говорить о своих чувствах и потребностях."
         )
 
-    elif anxious_percent >= 65:
+    elif (
+        anxiety_score >= 3
+        and avoidance_score < 3
+    ):
 
-        result_type = "Тревожный"
+        result_type = (
+            "Преимущественно тревожный профиль"
+        )
 
         description = (
-            "Для тебя отношения могут иметь очень большое "
-            "эмоциональное значение. Неопределённость, холодность "
-            "или изменение поведения человека могут быстро "
-            "вызывать тревогу и желание получить подтверждение."
+            "В ответах заметнее тревожность в отношениях. "
+            "Неопределённость и изменения в поведении "
+            "близкого человека могут переживаться особенно сильно."
         )
 
         advice = (
-            "Не оценивай отношения по одному сообщению, "
-            "задержке ответа или изменению настроения человека. "
-            "Смотри прежде всего на его поведение в целом."
+            "Старайся отделять реальные признаки проблем "
+            "от предположений и не оценивать отношения "
+            "по одному сообщению или реакции."
         )
 
-    elif avoidant_percent >= 65:
+    elif (
+        anxiety_score < 3
+        and avoidance_score >= 3
+    ):
 
-        result_type = "Избегающий"
+        result_type = (
+            "Преимущественно избегающий профиль"
+        )
 
         description = (
-            "Тебе важно сохранять самостоятельность и личное "
-            "пространство. Когда близости становится слишком много, "
-            "может появляться желание дистанцироваться или "
-            "эмоционально закрыться."
+            "В ответах заметнее стремление сохранять "
+            "эмоциональную автономность. Слишком сильная "
+            "близость может восприниматься как давление "
+            "или потеря личного пространства."
         )
 
         advice = (
-            "Важно не путать личные границы с постоянным "
-            "эмоциональным дистанцированием. Близость не означает "
-            "потерю свободы."
-        )
-
-    elif secure_percent >= 65:
-
-        result_type = "Надёжный"
-
-        description = (
-            "У тебя заметна способность сочетать близость "
-            "и самостоятельность. Ты можешь доверять человеку, "
-            "говорить о своих потребностях и сохранять личные границы."
-        )
-
-        advice = (
-            "Продолжай сохранять баланс между близостью "
-            "и собственной жизнью. Это помогает строить "
-            "более стабильные отношения."
+            "Личные границы важны, но вместо резкой "
+            "дистанции полезно прямо объяснять человеку, "
+            "что именно тебе сейчас нужно."
         )
 
     else:
 
-        result_type = "Смешанный"
+        result_type = (
+            "Смешанный тревожно-избегающий профиль"
+        )
 
         description = (
-            "У тебя нет одного ярко выраженного стиля. "
-            "Твои реакции могут сильно зависеть от конкретного "
-            "человека, ситуации и уровня доверия."
+            "В ответах одновременно заметны тревожность "
+            "и стремление дистанцироваться. В отношениях "
+            "это иногда может ощущаться как желание быть "
+            "ближе и одновременно желание защитить себя."
         )
 
         advice = (
-            "Обращай внимание не только на свои эмоции, "
-            "но и на повторяющиеся сценарии в разных отношениях."
+            "Не принимай решения на пике эмоций. "
+            "Попробуй сначала понять, чего ты хочешь, "
+            "а затем прямо сказать об этом человеку."
         )
 
-    # --------------------------------------------------------
-    # ФОРМИРУЕМ РЕЗУЛЬТАТ
-    # --------------------------------------------------------
+    # ========================================================
+    # УРОВНИ
+    # ========================================================
+
+    def get_level(score):
+
+        if score < 2:
+            return "низкая"
+
+        if score < 3:
+            return "умеренная"
+
+        if score < 4:
+            return "повышенная"
+
+        return "высокая"
+
+    anxiety_level = get_level(
+        anxiety_score
+    )
+
+    avoidance_level = get_level(
+        avoidance_score
+    )
 
     result = (
         "🧪 ТЕСТ НА СТИЛЬ ПРИВЯЗАННОСТИ\n\n"
 
-        f"❤️ ТВОЙ ОСНОВНОЙ СТИЛЬ:\n"
+        f"❤️ ТВОЙ ПРОФИЛЬ:\n"
         f"{result_type}\n\n"
 
-        f"📊 ТВОИ РЕЗУЛЬТАТЫ:\n\n"
-        f"🔴 Тревожность — {anxious_percent}%\n"
-        f"🔵 Избегание — {avoidant_percent}%\n"
-        f"🟢 Надёжность — {secure_percent}%\n\n"
+        "📊 РЕЗУЛЬТАТЫ\n\n"
 
-        f"🧠 ЧТО ЭТО ЗНАЧИТ:\n\n"
+        f"😰 Тревожность — {anxiety_percent}%\n"
+        f"Уровень: {anxiety_level}\n\n"
+
+        f"🧊 Избегание близости — {avoidance_percent}%\n"
+        f"Уровень: {avoidance_level}\n\n"
+
+        f"🟢 Условный индекс безопасности — "
+        f"{security_percent}%\n\n"
+
+        "🧠 ЧТО ЭТО ЗНАЧИТ\n\n"
         f"{description}\n\n"
 
-        f"🎯 ЧТО ВАЖНО:\n\n"
+        "🎯 ЧТО МОЖНО УЧЕСТЬ\n\n"
         f"{advice}\n\n"
 
-        "⚠️ Важно:\n"
-        "Этот тест не является медицинской или "
-        "психологической диагностикой. Он показывает "
-        "общие тенденции по твоим ответам."
+        "⚠️ ВАЖНО\n\n"
+        "Это ориентировочный тест для саморефлексии, "
+        "а не медицинская или психологическая диагностика. "
+        "Проценты — это наглядный перевод результатов "
+        "шкал в диапазон 0–100 и не являются клиническими нормами."
     )
 
-    return (
-        result_type,
-        anxious_percent,
-        avoidant_percent,
-        secure_percent,
-        result
-    )
+    return result
 
 
 # ============================================================
@@ -1056,14 +1091,18 @@ async def send_attachment_question(
     user_id
 ):
 
-    state = test_states.get(user_id)
+    state = test_states.get(
+        user_id
+    )
 
     if not state:
         return
 
     question_number = state["question"]
 
-    if question_number >= len(ATTACHMENT_QUESTIONS):
+    if question_number >= len(
+        ATTACHMENT_QUESTIONS
+    ):
         return
 
     question = ATTACHMENT_QUESTIONS[
@@ -1096,7 +1135,9 @@ async def handle_attachment_test(
 
     user_id = update.effective_user.id
 
-    state = test_states.get(user_id)
+    state = test_states.get(
+        user_id
+    )
 
     if not state:
         return False
@@ -1106,9 +1147,9 @@ async def handle_attachment_test(
     values = {
         "1️⃣ Совсем не про меня": 1,
         "2️⃣ Скорее не про меня": 2,
-        "3️⃣ Иногда про меня": 3,
+        "3️⃣ Частично про меня": 3,
         "4️⃣ Скорее про меня": 4,
-        "5️⃣ Очень про меня": 5
+        "5️⃣ Полностью про меня": 5
     }
 
     if text not in values:
@@ -1136,22 +1177,37 @@ async def handle_attachment_test(
 
         return True
 
-    answers = state["answers"]
+    try:
 
-    (
-        result_type,
-        anxious_percent,
-        avoidant_percent,
-        secure_percent,
-        result
-    ) = attachment_result(
-        answers
-    )
+        result = attachment_result(
+            state["answers"]
+        )
+
+    except Exception:
+
+        logging.exception(
+            "Ошибка расчёта теста"
+        )
+
+        test_states.pop(
+            user_id,
+            None
+        )
+
+        user_modes[user_id] = None
+
+        await update.message.reply_text(
+            "❌ Не удалось рассчитать результат. "
+            "Попробуй пройти тест ещё раз.",
+            reply_markup=main_keyboard()
+        )
+
+        return True
 
     saved = save_analysis(
         user_id=user_id,
         analysis_type="Тест — стиль привязанности",
-        user_message="Тест из 20 вопросов",
+        user_message="Тест на два измерения привязанности",
         result=result
     )
 
@@ -1178,8 +1234,8 @@ async def handle_attachment_test(
     else:
 
         await update.message.reply_text(
-            "Результат готов, но сохранить "
-            "его в историю не удалось.",
+            "Результат готов, но сохранить его "
+            "в историю не удалось.",
             reply_markup=main_keyboard()
         )
 
@@ -1242,14 +1298,18 @@ async def handle_profile(
 
     user_id = update.effective_user.id
 
-    state = profile_states.get(user_id)
+    state = profile_states.get(
+        user_id
+    )
 
     if not state:
         return False
 
     text = update.message.text.strip()
 
-    step = state.get("step")
+    step = state.get(
+        "step"
+    )
 
     if step == "name":
 
@@ -1392,7 +1452,9 @@ async def show_profile(
 
     user_id = update.effective_user.id
 
-    profile = get_user_profile(user_id)
+    profile = get_user_profile(
+        user_id
+    )
 
     if not profile:
 
@@ -1407,9 +1469,20 @@ async def show_profile(
 
         return
 
-    name = profile.get("name", "—")
-    age = profile.get("age", "—")
-    gender = profile.get("gender", "—")
+    name = profile.get(
+        "name",
+        "—"
+    )
+
+    age = profile.get(
+        "age",
+        "—"
+    )
+
+    gender = profile.get(
+        "gender",
+        "—"
+    )
 
     await update.message.reply_text(
         "👤 МОЙ ПРОФИЛЬ\n\n"
@@ -1552,12 +1625,19 @@ async def open_analysis(
 
     text = update.message.text.strip()
 
-    history = user_modes.get(user_id)
+    history = user_modes.get(
+        user_id
+    )
 
-    if not isinstance(history, dict):
+    if not isinstance(
+        history,
+        dict
+    ):
+
         return False
 
     if history.get("type") != "history":
+
         return False
 
     analyses = history.get(
@@ -1577,16 +1657,22 @@ async def open_analysis(
         ):
 
             selected_index = index - 1
+
             break
 
     if selected_index is None:
+
         return False
 
     try:
 
-        analysis = analyses[selected_index]
+        analysis = analyses[
+            selected_index
+        ]
 
-        analysis_id = analysis.get("id")
+        analysis_id = analysis.get(
+            "id"
+        )
 
         if not analysis_id:
 
@@ -1639,7 +1725,9 @@ async def open_analysis(
             ""
         )
 
-        result = clean_markdown(result)
+        result = clean_markdown(
+            result
+        )
 
         answer = (
             f"📚 {analysis_type}\n\n"
@@ -1755,7 +1843,9 @@ async def handle_photo(
                 "Gemini вернул пустой ответ"
             )
 
-        answer = clean_markdown(answer)
+        answer = clean_markdown(
+            answer
+        )
 
         save_analysis(
             user_id=user_id,
@@ -1829,7 +1919,7 @@ async def handle_message(
             return
 
     # ========================================================
-    # ИСТОРИЯ
+    # ОТКРЫТИЕ СОХРАНЁННОГО РАЗБОРА
     # ========================================================
 
     if await open_analysis(
@@ -2127,7 +2217,9 @@ async def handle_message(
     # ПРОВЕРЯЕМ РЕЖИМ
     # ========================================================
 
-    mode = user_modes.get(user_id)
+    mode = user_modes.get(
+        user_id
+    )
 
     if not mode:
 
@@ -2142,7 +2234,10 @@ async def handle_message(
     # ИСТОРИЯ
     # ========================================================
 
-    if isinstance(mode, dict):
+    if isinstance(
+        mode,
+        dict
+    ):
 
         if mode.get("type") == "history":
 
@@ -2180,22 +2275,34 @@ async def handle_message(
     if mode == "chat":
 
         task = CHAT_PROMPT
-        analysis_type = "Разбор переписки"
+
+        analysis_type = (
+            "Разбор переписки"
+        )
 
     elif mode == "situation":
 
         task = SITUATION_PROMPT
-        analysis_type = "Разбор ситуации"
+
+        analysis_type = (
+            "Разбор ситуации"
+        )
 
     elif mode == "relationship":
 
         task = RELATIONSHIP_PROMPT
-        analysis_type = "Отношения"
+
+        analysis_type = (
+            "Отношения"
+        )
 
     else:
 
         task = STRESS_PROMPT
-        analysis_type = "Тревога и стресс"
+
+        analysis_type = (
+            "Тревога и стресс"
+        )
 
     # ========================================================
     # ФИНАЛЬНЫЙ PROMPT
@@ -2230,11 +2337,9 @@ async def handle_message(
                 "Gemini вернул пустой ответ"
             )
 
-        answer = clean_markdown(answer)
-
-        # ====================================================
-        # СОХРАНЯЕМ
-        # ====================================================
+        answer = clean_markdown(
+            answer
+        )
 
         saved = save_analysis(
             user_id=user_id,
@@ -2242,10 +2347,6 @@ async def handle_message(
             user_message=text,
             result=answer
         )
-
-        # ====================================================
-        # ОТПРАВЛЯЕМ
-        # ====================================================
 
         await send_long_message(
             update,
@@ -2298,7 +2399,6 @@ def main():
         .build()
     )
 
-    # /start
     app.add_handler(
         CommandHandler(
             "start",
@@ -2306,7 +2406,6 @@ def main():
         )
     )
 
-    # Фото
     app.add_handler(
         MessageHandler(
             filters.PHOTO,
@@ -2314,7 +2413,6 @@ def main():
         )
     )
 
-    # Текст
     app.add_handler(
         MessageHandler(
             filters.TEXT
@@ -2329,10 +2427,6 @@ def main():
 
     app.run_polling()
 
-
-# ============================================================
-# MAIN
-# ============================================================
 
 if __name__ == "__main__":
     main()
