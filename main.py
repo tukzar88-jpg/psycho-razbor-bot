@@ -55,9 +55,38 @@ keyboard = [
     ["🧠 Разбор ситуации"],
     ["❤️ Отношения", "😰 Тревога и стресс"],
     ["🧪 Психологический тест"],
+    ["⚙️ Мой профиль"],
 ]
 
+
+gender_keyboard = [
+    ["👨 Мужской", "👩 Женский"],
+    ["Не хочу указывать"],
+]
+
+
+# ============================================================
+# ДАННЫЕ ПОЛЬЗОВАТЕЛЕЙ
+# ============================================================
+
+# Профиль пользователя:
+# {
+#     user_id: {
+#         "name": "...",
+#         "age": "...",
+#         "gender": "..."
+#     }
+# }
+
+user_profiles = {}
+
+
+# Текущий режим пользователя
 user_modes = {}
+
+
+# Этап заполнения профиля
+user_profile_steps = {}
 
 
 # ============================================================
@@ -67,38 +96,107 @@ user_modes = {}
 def clean_markdown(text):
     """
     Убирает Markdown-разметку Gemini,
-    чтобы Telegram показывал красивый обычный текст.
+    чтобы Telegram показывал обычный красивый текст.
     """
 
     if not text:
         return text
 
-    # Убираем жирный текст **текст**
+    # Жирный текст
     text = re.sub(r"\*\*(.*?)\*\*", r"\1", text)
 
-    # Убираем курсив *текст*
-    text = re.sub(r"(?<!\*)\*(?!\s)(.*?)(?<!\s)\*(?!\*)", r"\1", text)
+    # Курсив
+    text = re.sub(
+        r"(?<!\*)\*(?!\s)(.*?)(?<!\s)\*(?!\*)",
+        r"\1",
+        text
+    )
 
-    # Убираем подчёркивания __текст__
+    # Подчёркивание
     text = re.sub(r"__(.*?)__", r"\1", text)
 
-    # Убираем Markdown-заголовки
-    text = re.sub(r"(?m)^\s*#{1,6}\s*", "", text)
+    # Заголовки
+    text = re.sub(
+        r"(?m)^\s*#{1,6}\s*",
+        "",
+        text
+    )
 
-    # Убираем цитаты >
-    text = re.sub(r"(?m)^\s*>\s?", "", text)
+    # Цитаты
+    text = re.sub(
+        r"(?m)^\s*>\s?",
+        "",
+        text
+    )
 
-    # Убираем тройные и одиночные обратные кавычки
+    # Обратные кавычки
     text = text.replace("```", "")
     text = text.replace("`", "")
 
     # Убираем лишние пробелы перед переносами
-    text = re.sub(r"[ \t]+\n", "\n", text)
+    text = re.sub(
+        r"[ \t]+\n",
+        "\n",
+        text
+    )
 
-    # Не допускаем больше двух пустых строк подряд
-    text = re.sub(r"\n{3,}", "\n\n", text)
+    # Максимум две пустые строки
+    text = re.sub(
+        r"\n{3,}",
+        "\n\n",
+        text
+    )
 
     return text.strip()
+
+
+# ============================================================
+# ПРОФИЛЬ ПОЛЬЗОВАТЕЛЯ
+# ============================================================
+
+def get_profile_text(user_id):
+    """
+    Возвращает профиль пользователя
+    для передачи Gemini.
+    """
+
+    profile = user_profiles.get(user_id)
+
+    if not profile:
+        return ""
+
+    name = profile.get("name", "")
+    age = profile.get("age", "")
+    gender = profile.get("gender", "")
+
+    return (
+        "\n\n"
+        "ПРОФИЛЬ ПОЛЬЗОВАТЕЛЯ:\n"
+        f"Имя: {name}\n"
+        f"Возраст: {age}\n"
+        f"Пол: {gender}\n\n"
+        "Учитывай этот профиль при анализе ситуации. "
+        "Не делай выводы только на основании пола или возраста. "
+        "Основывай анализ прежде всего на фактах и содержании "
+        "переписки.\n"
+    )
+
+
+def profile_complete(user_id):
+    """
+    Проверяет, заполнен ли профиль.
+    """
+
+    profile = user_profiles.get(user_id)
+
+    if not profile:
+        return False
+
+    return (
+        bool(profile.get("name"))
+        and bool(profile.get("age"))
+        and bool(profile.get("gender"))
+    )
 
 
 # ============================================================
@@ -129,14 +227,13 @@ SYSTEM_PROMPT = """
 
 Никогда не используй Markdown.
 
-НЕ используй:
+Не используй:
 **
 *
 #
 >
 `
 __
----
 
 Не используй жирный текст.
 Не используй курсив.
@@ -148,6 +245,7 @@ __
 • пункт
 
 Для нумерованных вариантов используй:
+
 1. вариант
 2. вариант
 3. вариант
@@ -383,17 +481,13 @@ STRESS_PROMPT = """
 
 
 # ============================================================
-# START
+# ПОКАЗ ГЛАВНОГО МЕНЮ
 # ============================================================
 
-async def start(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE
-):
-
-    user_id = update.effective_user.id
-
-    user_modes[user_id] = None
+async def show_main_menu(update):
+    """
+    Показывает основное меню.
+    """
 
     await update.message.reply_text(
         "🧠 ПСИХОРАЗБОР\n\n"
@@ -409,6 +503,217 @@ async def start(
 
 
 # ============================================================
+# НАЧАЛО ЗАПОЛНЕНИЯ ПРОФИЛЯ
+# ============================================================
+
+async def start_profile(update):
+    """
+    Запускает анкету пользователя.
+    """
+
+    user_id = update.effective_user.id
+
+    user_profile_steps[user_id] = "name"
+
+    await update.message.reply_text(
+        "👋 Привет!\n\n"
+        "Давай сначала немного познакомимся.\n\n"
+        "Как тебя зовут?"
+    )
+
+
+# ============================================================
+# START
+# ============================================================
+
+async def start(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+
+    user_id = update.effective_user.id
+
+    user_modes[user_id] = None
+
+    if not profile_complete(user_id):
+
+        await start_profile(update)
+
+        return
+
+    await show_main_menu(update)
+
+
+# ============================================================
+# МОЙ ПРОФИЛЬ
+# ============================================================
+
+async def edit_profile(update):
+    """
+    Запускает повторное заполнение профиля.
+    """
+
+    user_id = update.effective_user.id
+
+    user_profile_steps[user_id] = "name"
+
+    await update.message.reply_text(
+        "⚙️ Давай обновим профиль.\n\n"
+        "Как тебя зовут?"
+    )
+
+
+# ============================================================
+# ОБРАБОТКА ПРОФИЛЯ
+# ============================================================
+
+async def handle_profile_input(
+    update: Update,
+    text: str
+):
+
+    user_id = update.effective_user.id
+
+    step = user_profile_steps.get(user_id)
+
+    if not step:
+        return False
+
+
+    # ========================================================
+    # ИМЯ
+    # ========================================================
+
+    if step == "name":
+
+        name = text.strip()
+
+        if len(name) < 2:
+
+            await update.message.reply_text(
+                "Напиши имя чуть подробнее 🙂"
+            )
+
+            return True
+
+        if len(name) > 40:
+
+            await update.message.reply_text(
+                "Имя слишком длинное. "
+                "Напиши, пожалуйста, короче."
+            )
+
+            return True
+
+        if user_id not in user_profiles:
+
+            user_profiles[user_id] = {}
+
+        user_profiles[user_id]["name"] = name
+
+        user_profile_steps[user_id] = "age"
+
+        await update.message.reply_text(
+            f"Приятно познакомиться, {name}! 👋\n\n"
+            "🎂 Сколько тебе лет?"
+        )
+
+        return True
+
+
+    # ========================================================
+    # ВОЗРАСТ
+    # ========================================================
+
+    if step == "age":
+
+        age_text = text.strip()
+
+        try:
+
+            age = int(age_text)
+
+        except ValueError:
+
+            await update.message.reply_text(
+                "Напиши возраст цифрами, например: 25"
+            )
+
+            return True
+
+        if age < 13 or age > 100:
+
+            await update.message.reply_text(
+                "Укажи возраст от 13 до 100 лет."
+            )
+
+            return True
+
+        user_profiles[user_id]["age"] = age
+
+        user_profile_steps[user_id] = "gender"
+
+        await update.message.reply_text(
+            "🚻 Укажи свой пол:",
+
+            reply_markup=ReplyKeyboardMarkup(
+                gender_keyboard,
+                resize_keyboard=True,
+                one_time_keyboard=True
+            )
+        )
+
+        return True
+
+
+    # ========================================================
+    # ПОЛ
+    # ========================================================
+
+    if step == "gender":
+
+        gender_map = {
+            "👨 Мужской": "мужской",
+            "👩 Женский": "женский",
+            "Не хочу указывать": "не указан",
+        }
+
+        gender = gender_map.get(text)
+
+        if not gender:
+
+            await update.message.reply_text(
+                "Выбери один из вариантов ниже 👇",
+
+                reply_markup=ReplyKeyboardMarkup(
+                    gender_keyboard,
+                    resize_keyboard=True,
+                    one_time_keyboard=True
+                )
+            )
+
+            return True
+
+        user_profiles[user_id]["gender"] = gender
+
+        user_profile_steps.pop(user_id, None)
+
+        user_modes[user_id] = None
+
+        await update.message.reply_text(
+            "✅ Профиль заполнен!\n\n"
+            "Теперь я смогу учитывать твой возраст, "
+            "имя и пол при анализе переписок и ситуаций."
+        )
+
+        await show_main_menu(update)
+
+        return True
+
+    return False
+
+
+# ============================================================
 # АНАЛИЗ СКРИНШОТА
 # ============================================================
 
@@ -418,6 +723,14 @@ async def handle_photo(
 ):
 
     user_id = update.effective_user.id
+
+    # Если профиль не заполнен
+    if not profile_complete(user_id):
+
+        await start_profile(update)
+
+        return
+
 
     logging.info(
         "Получен скриншот от пользователя %s",
@@ -443,11 +756,18 @@ async def handle_photo(
             bytes(image_bytes)
         ).decode("utf-8")
 
+
+        # Профиль пользователя
+        profile_text = get_profile_text(user_id)
+
+
         prompt = (
             SYSTEM_PROMPT
+            + profile_text
             + "\n\n"
             + SCREENSHOT_PROMPT
         )
+
 
         response = client.interactions.create(
             model=MODEL,
@@ -465,16 +785,21 @@ async def handle_photo(
             ]
         )
 
+
         answer = response.output_text
 
         if not answer:
+
             raise RuntimeError(
                 "Gemini вернул пустой ответ"
             )
 
-        # Убираем Markdown перед отправкой
+
+        # Убираем Markdown
         answer = clean_markdown(answer)
 
+
+        # Telegram ограничивает длину сообщения
         for i in range(
             0,
             len(answer),
@@ -484,6 +809,7 @@ async def handle_photo(
             await update.message.reply_text(
                 answer[i:i + 4000]
             )
+
 
     except Exception as e:
 
@@ -508,7 +834,32 @@ async def handle_message(
 
     user_id = update.effective_user.id
 
-    text = update.message.text
+    text = update.message.text.strip()
+
+
+    # ========================================================
+    # СНАЧАЛА ПРОВЕРЯЕМ АНКЕТУ
+    # ========================================================
+
+    if user_id in user_profile_steps:
+
+        await handle_profile_input(
+            update,
+            text
+        )
+
+        return
+
+
+    # ========================================================
+    # ПРОФИЛЬ
+    # ========================================================
+
+    if text == "⚙️ Мой профиль":
+
+        await edit_profile(update)
+
+        return
 
 
     # ========================================================
@@ -671,11 +1022,19 @@ async def handle_message(
 
 
     # ========================================================
+    # ПРОФИЛЬ
+    # ========================================================
+
+    profile_text = get_profile_text(user_id)
+
+
+    # ========================================================
     # ФИНАЛЬНЫЙ PROMPT
     # ========================================================
 
     prompt = (
         SYSTEM_PROMPT
+        + profile_text
         + "\n\n"
         + task
         + "\n\n"
@@ -695,6 +1054,7 @@ async def handle_message(
             input=prompt
         )
 
+
         answer = response.output_text
 
         if not answer:
@@ -703,9 +1063,12 @@ async def handle_message(
                 "Gemini вернул пустой ответ"
             )
 
+
         # Убираем Markdown
         answer = clean_markdown(answer)
 
+
+        # Отправляем частями
         for i in range(
             0,
             len(answer),
@@ -715,6 +1078,7 @@ async def handle_message(
             await update.message.reply_text(
                 answer[i:i + 4000]
             )
+
 
     except Exception as e:
 
@@ -729,6 +1093,41 @@ async def handle_message(
 
 
 # ============================================================
+# ОБРАБОТКА КОМАНДЫ /PROFILE
+# ============================================================
+
+async def profile_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+
+    user_id = update.effective_user.id
+
+    profile = user_profiles.get(user_id)
+
+    if not profile:
+
+        await start_profile(update)
+
+        return
+
+
+    name = profile.get("name", "не указано")
+    age = profile.get("age", "не указано")
+    gender = profile.get("gender", "не указан")
+
+
+    await update.message.reply_text(
+        "⚙️ ТВОЙ ПРОФИЛЬ\n\n"
+        f"👤 Имя: {name}\n"
+        f"🎂 Возраст: {age}\n"
+        f"🚻 Пол: {gender}\n\n"
+        "Чтобы изменить данные, нажми "
+        "«⚙️ Мой профиль»."
+    )
+
+
+# ============================================================
 # ЗАПУСК
 # ============================================================
 
@@ -738,11 +1137,13 @@ def main():
         "🧠 ПСИХОРАЗБОР запускается..."
     )
 
+
     app = Application.builder().token(
         TELEGRAM_TOKEN
     ).build()
 
 
+    # /start
     app.add_handler(
         CommandHandler(
             "start",
@@ -751,6 +1152,16 @@ def main():
     )
 
 
+    # /profile
+    app.add_handler(
+        CommandHandler(
+            "profile",
+            profile_command
+        )
+    )
+
+
+    # Фотографии
     app.add_handler(
         MessageHandler(
             filters.PHOTO,
@@ -759,6 +1170,7 @@ def main():
     )
 
 
+    # Текст
     app.add_handler(
         MessageHandler(
             filters.TEXT & ~filters.COMMAND,
@@ -771,8 +1183,13 @@ def main():
         "🟢 ПСИХОРАЗБОР успешно запущен."
     )
 
+
     app.run_polling()
 
+
+# ============================================================
+# ЗАПУСК ПРОГРАММЫ
+# ============================================================
 
 if __name__ == "__main__":
 
