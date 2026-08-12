@@ -6,15 +6,19 @@ import re
 from google import genai
 from supabase import create_client, Client
 
-from telegram import Update, ReplyKeyboardMarkup
+from telegram import (
+    Update,
+    ReplyKeyboardMarkup,
+    ReplyKeyboardRemove,
+)
 from telegram.ext import (
     Application,
     CommandHandler,
     MessageHandler,
     ContextTypes,
+    ConversationHandler,
     filters,
 )
-
 
 # ============================================================
 # НАСТРОЙКИ
@@ -27,247 +31,91 @@ logging.basicConfig(
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_SECRET_KEY = os.getenv("SUPABASE_SECRET_KEY")
 
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
 if not TELEGRAM_TOKEN:
-    raise RuntimeError("TELEGRAM_BOT_TOKEN не задан в Railway")
+    raise RuntimeError(
+        "TELEGRAM_BOT_TOKEN не задан в Railway"
+    )
 
 if not GEMINI_API_KEY:
-    raise RuntimeError("GEMINI_API_KEY не задан в Railway")
+    raise RuntimeError(
+        "GEMINI_API_KEY не задан в Railway"
+    )
 
 if not SUPABASE_URL:
-    raise RuntimeError("SUPABASE_URL не задан в Railway")
+    raise RuntimeError(
+        "SUPABASE_URL не задан в Railway"
+    )
 
-if not SUPABASE_SECRET_KEY:
-    raise RuntimeError("SUPABASE_SECRET_KEY не задан в Railway")
-
+if not SUPABASE_KEY:
+    raise RuntimeError(
+        "SUPABASE_KEY не задан в Railway"
+    )
 
 # ============================================================
-# GEMINI
+# КЛИЕНТЫ
 # ============================================================
 
-client = genai.Client(
+gemini = genai.Client(
     api_key=GEMINI_API_KEY
+)
+
+supabase: Client = create_client(
+    SUPABASE_URL,
+    SUPABASE_KEY
 )
 
 MODEL = "gemini-3.6-flash"
 
-
 # ============================================================
-# SUPABASE
-# ============================================================
-
-supabase: Client = create_client(
-    SUPABASE_URL,
-    SUPABASE_SECRET_KEY
-)
-
-
-# ============================================================
-# МЕНЮ
+# СОСТОЯНИЯ
 # ============================================================
 
-keyboard = [
+PROFILE_NAME = 1
+PROFILE_AGE = 2
+PROFILE_GENDER = 3
+
+user_modes = {}
+user_profile_state = {}
+
+# ============================================================
+# КЛАВИАТУРЫ
+# ============================================================
+
+MAIN_KEYBOARD = [
     ["💬 Разбор переписки"],
     ["📸 Анализ скриншота"],
     ["🧠 Разбор ситуации"],
     ["❤️ Отношения", "😰 Тревога и стресс"],
     ["🧪 Психологический тест"],
-    ["⚙️ Мой профиль"],
-    ["📚 Мои разборы"],
+    ["📚 Мои разборы", "⚙️ Мой профиль"],
 ]
 
-profile_keyboard = [
-    ["✏️ Изменить профиль"],
-    ["⬅️ Главное меню"],
+PROFILE_GENDER_KEYBOARD = [
+    ["👨 Мужчина", "👩 Женщина"],
 ]
 
-history_keyboard = [
-    ["⬅️ Главное меню"],
-]
-
-gender_keyboard = [
-    ["👨 Мужской", "👩 Женский"],
-    ["Не хочу указывать"],
-]
-
-
 # ============================================================
-# ВРЕМЕННЫЕ ДАННЫЕ
+# ОБЩИЕ ФУНКЦИИ
 # ============================================================
 
-user_modes = {}
-user_profile_steps = {}
-profile_cache = {}
-
-
-# ============================================================
-# SUPABASE — ПРОФИЛЬ
-# ============================================================
-
-def get_user_profile(user_id):
-
-    try:
-
-        result = (
-            supabase
-            .table("users")
-            .select(
-                "telegram_id, name, age, gender"
-            )
-            .eq(
-                "telegram_id",
-                user_id
-            )
-            .limit(1)
-            .execute()
-        )
-
-        if result.data:
-            return result.data[0]
-
-        return None
-
-    except Exception:
-
-        logging.exception(
-            "Ошибка получения профиля %s",
-            user_id
-        )
-
-        return None
-
-
-def save_user_profile(
-    user_id,
-    name,
-    age,
-    gender
-):
-
-    data = {
-        "telegram_id": user_id,
-        "name": name,
-        "age": age,
-        "gender": gender,
-    }
-
-    result = (
-        supabase
-        .table("users")
-        .upsert(
-            data,
-            on_conflict="telegram_id"
-        )
-        .execute()
+def main_keyboard():
+    return ReplyKeyboardMarkup(
+        MAIN_KEYBOARD,
+        resize_keyboard=True
     )
 
-    logging.info(
-        "Профиль %s сохранён",
-        user_id
-    )
-
-    return result.data
-
-
-def profile_complete(profile):
-
-    if not profile:
-        return False
-
-    return (
-        profile.get("name") is not None
-        and str(profile.get("name")).strip() != ""
-        and profile.get("age") is not None
-        and profile.get("gender") is not None
-    )
-
-
-# ============================================================
-# СОХРАНЕНИЕ РАЗБОРА
-# ============================================================
-
-def save_analysis(
-    user_id,
-    analysis_type,
-    user_message,
-    result
-):
-
-    try:
-
-        data = {
-            "telegram_id": user_id,
-            "analysis_type": analysis_type,
-            "user_message": user_message[:10000],
-            "result": result[:30000],
-        }
-
-        supabase \
-            .table("analyses") \
-            .insert(data) \
-            .execute()
-
-        logging.info(
-            "Разбор сохранён: user=%s type=%s",
-            user_id,
-            analysis_type
-        )
-
-    except Exception:
-
-        logging.exception(
-            "Ошибка сохранения разбора"
-        )
-
-
-# ============================================================
-# ПОЛУЧЕНИЕ ИСТОРИИ
-# ============================================================
-
-def get_analysis_history(user_id):
-
-    try:
-
-        result = (
-            supabase
-            .table("analyses")
-            .select(
-                "id, analysis_type, result, created_at"
-            )
-            .eq(
-                "telegram_id",
-                user_id
-            )
-            .order(
-                "created_at",
-                desc=True
-            )
-            .limit(10)
-            .execute()
-        )
-
-        return result.data or []
-
-    except Exception:
-
-        logging.exception(
-            "Ошибка получения истории"
-        )
-
-        return []
-
-
-# ============================================================
-# ОЧИСТКА MARKDOWN
-# ============================================================
 
 def clean_markdown(text):
+    """
+    Убирает Markdown-разметку Gemini.
+    """
 
     if not text:
-        return text
+        return ""
 
     text = re.sub(
         r"\*\*(.*?)\*\*",
@@ -277,14 +125,14 @@ def clean_markdown(text):
     )
 
     text = re.sub(
-        r"__(.*?)__",
+        r"(?<!\*)\*(?!\s)(.*?)(?<!\s)\*(?!\*)",
         r"\1",
         text,
         flags=re.DOTALL
     )
 
     text = re.sub(
-        r"(?<!\*)\*(?!\s)(.*?)(?<!\s)\*(?!\*)",
+        r"__(.*?)__",
         r"\1",
         text,
         flags=re.DOTALL
@@ -320,29 +168,162 @@ def clean_markdown(text):
     return text.strip()
 
 
-# ============================================================
-# ПРОФИЛЬ ДЛЯ GEMINI
-# ============================================================
+def get_profile(user_id):
+    try:
+        result = (
+            supabase
+            .table("users")
+            .select("*")
+            .eq("telegram_id", user_id)
+            .limit(1)
+            .execute()
+        )
 
-def get_profile_text(profile):
+        if result.data:
+            return result.data[0]
 
+    except Exception:
+        logging.exception(
+            "Ошибка получения профиля %s",
+            user_id
+        )
+
+    return None
+
+
+def save_profile(user_id, name, age, gender):
+    try:
+        existing = get_profile(user_id)
+
+        data = {
+            "telegram_id": user_id,
+            "name": name,
+            "age": age,
+            "gender": gender,
+        }
+
+        if existing:
+            (
+                supabase
+                .table("users")
+                .update(data)
+                .eq("telegram_id", user_id)
+                .execute()
+            )
+        else:
+            (
+                supabase
+                .table("users")
+                .insert(data)
+                .execute()
+            )
+
+        return True
+
+    except Exception:
+        logging.exception(
+            "Ошибка сохранения профиля %s",
+            user_id
+        )
+
+        return False
+
+
+def profile_text(profile):
     if not profile:
-        return ""
+        return (
+            "⚙️ Мой профиль\n\n"
+            "Профиль пока не заполнен."
+        )
+
+    name = profile.get("name") or "Не указано"
+    age = profile.get("age") or "Не указан"
+    gender = profile.get("gender") or "Не указан"
+
+    if gender == "male":
+        gender_text = "Мужчина"
+    elif gender == "female":
+        gender_text = "Женщина"
+    else:
+        gender_text = str(gender)
 
     return (
-        "\n\n"
-        "ПРОФИЛЬ ПОЛЬЗОВАТЕЛЯ:\n"
-        f"Имя: {profile.get('name', '')}\n"
-        f"Возраст: {profile.get('age', '')}\n"
-        f"Пол: {profile.get('gender', '')}\n\n"
-        "Учитывай профиль при анализе. "
-        "Не делай необоснованных выводов только "
-        "на основании возраста или пола.\n"
+        "⚙️ МОЙ ПРОФИЛЬ\n\n"
+        f"👤 Имя: {name}\n"
+        f"🎂 Возраст: {age}\n"
+        f"⚧ Пол: {gender_text}\n\n"
+        "Эти данные используются при анализе, "
+        "чтобы лучше учитывать твой контекст."
     )
 
 
+async def send_long_message(update, text):
+    if not text:
+        return
+
+    text = clean_markdown(text)
+
+    for i in range(0, len(text), 4000):
+        await update.message.reply_text(
+            text[i:i + 4000]
+        )
+
+
+def profile_context(profile):
+    if not profile:
+        return (
+            "Профиль пользователя пока не заполнен."
+        )
+
+    name = profile.get("name") or "не указано"
+    age = profile.get("age") or "не указан"
+    gender = profile.get("gender") or "не указан"
+
+    return (
+        "ПРОФИЛЬ ПОЛЬЗОВАТЕЛЯ:\n"
+        f"Имя: {name}\n"
+        f"Возраст: {age}\n"
+        f"Пол: {gender}\n\n"
+        "Учитывай эти данные в анализе, "
+        "но не упоминай их без необходимости."
+    )
+
+
+def save_analysis(
+    user_id,
+    analysis_type,
+    user_text,
+    answer
+):
+    try:
+        data = {
+            "telegram_id": user_id,
+            "analysis_type": analysis_type,
+            "input_text": user_text[:10000],
+            "result_text": answer[:30000],
+        }
+
+        (
+            supabase
+            .table("analyses")
+            .insert(data)
+            .execute()
+        )
+
+        logging.info(
+            "Анализ сохранён для пользователя %s",
+            user_id
+        )
+
+    except Exception:
+        logging.exception(
+            "Ошибка сохранения анализа %s",
+            user_id
+        )
+
+
 # ============================================================
-# SYSTEM PROMPT
+# ПРОМПТЫ
 # ============================================================
 
 SYSTEM_PROMPT = """
@@ -356,26 +337,25 @@ SYSTEM_PROMPT = """
 
 ВАЖНЫЕ ПРАВИЛА:
 
-- Не ставь медицинских или психиатрических диагнозов.
-- Не утверждай, что точно знаешь мысли другого человека.
-- Отделяй факты от предположений.
-- Не придумывай отсутствующие факты.
-- Если информации недостаточно — скажи об этом.
-- Не поддерживай опасное или токсичное поведение.
-- Не читай пользователю мораль.
-- Отвечай простым человеческим языком.
+• Не ставь медицинских или психиатрических диагнозов.
+• Не утверждай, что точно знаешь мысли другого человека.
+• Отделяй факты от предположений.
+• Не придумывай отсутствующие факты.
+• Если информации недостаточно — скажи об этом.
+• Не поддерживай опасное или токсичное поведение.
+• Не читай пользователю мораль.
+• Отвечай простым человеческим языком.
 
 СТРОГОЕ ПРАВИЛО ФОРМАТИРОВАНИЯ:
 
 Никогда не используй Markdown.
 
 Не используй:
+
 **
 *
 #
 >
-`
-__
 
 Не используй жирный текст.
 Не используй курсив.
@@ -384,6 +364,7 @@ __
 Используй обычный текст.
 
 Для списков используй:
+
 • пункт
 
 Для нумерованных вариантов:
@@ -396,17 +377,16 @@ __
 
 Текст должен выглядеть естественно
 в сообщении Telegram.
+
+Не ставь звёздочки вокруг слов.
+
+Главная цель — дать человеку практическую пользу.
 """
-
-
-# ============================================================
-# ПРОМПТЫ
-# ============================================================
 
 CHAT_PROMPT = """
 Пользователь прислал переписку.
 
-Сделай разбор:
+Сделай подробный, но понятный разбор:
 
 🔥 РАЗБОР ПЕРЕПИСКИ
 
@@ -418,12 +398,14 @@ CHAT_PROMPT = """
 
 💬 ИНИЦИАТИВА
 
-Кто чаще:
-• начинает разговор;
-• задаёт вопросы;
-• поддерживает диалог;
-• предлагает темы;
-• предлагает встречу.
+Определи:
+
+• кто чаще начинает разговор;
+• кто задаёт вопросы;
+• кто поддерживает диалог;
+• кто предлагает темы;
+• кто предлагает встречу;
+• кто отвечает односложно.
 
 🟢 ПРИЗНАКИ ИНТЕРЕСА
 
@@ -437,14 +419,15 @@ CHAT_PROMPT = """
 
 🧠 МОЙ ВЫВОД
 
-Дай честный и короткий вывод.
+Дай честный вывод.
 
 Не говори:
 "она точно тебя любит"
 или:
 "она точно тебя не любит".
 
-Объясни наиболее вероятный вариант.
+Объясни наиболее вероятный вариант
+и степень уверенности.
 
 🎯 ЧТО ДЕЛАТЬ
 
@@ -458,9 +441,12 @@ CHAT_PROMPT = """
 2. Уверенный
 3. Дерзкий
 
-Не придумывай факты.
-"""
+Варианты должны быть естественными
+для Telegram.
 
+Не используй Markdown.
+Не ставь звёздочки.
+"""
 
 SCREENSHOT_PROMPT = """
 На изображении находится переписка между людьми.
@@ -477,12 +463,10 @@ SCREENSHOT_PROMPT = """
 
 📊 ИНТЕРЕС: X/10
 
-Оцени уровень заинтересованности
-по реально видимым признакам.
-
 💬 ИНИЦИАТИВА
 
 Определи:
+
 • кто чаще пишет первым;
 • кто задаёт вопросы;
 • кто поддерживает разговор;
@@ -492,7 +476,9 @@ SCREENSHOT_PROMPT = """
 
 🟢 ПРИЗНАКИ ИНТЕРЕСА
 
-Укажи конкретные сообщения.
+Укажи конкретные сообщения
+или особенности переписки,
+которые могут говорить об интересе.
 
 🔴 ЧТО НАСТОРАЖИВАЕТ
 
@@ -502,6 +488,9 @@ SCREENSHOT_PROMPT = """
 🧠 ЧТО, СКОРЕЕ ВСЕГО, ПРОИСХОДИТ
 
 Дай наиболее вероятное объяснение.
+
+Важно:
+ты не можешь точно знать мысли человека.
 
 🎯 ЧТО ДЕЛАТЬ
 
@@ -517,8 +506,14 @@ SCREENSHOT_PROMPT = """
 
 Не придумывай сообщения,
 которых нет на изображении.
-"""
 
+Если изображение слишком маленькое,
+обрезано или плохо читается,
+честно сообщи об этом.
+
+Не используй Markdown.
+Не ставь звёздочки.
+"""
 
 SITUATION_PROMPT = """
 Пользователь описал ситуацию.
@@ -527,17 +522,27 @@ SITUATION_PROMPT = """
 
 🔎 ЧТО ПРОИСХОДИТ
 
+Кратко объясни ситуацию.
+
 🧠 ВОЗМОЖНЫЕ ПРИЧИНЫ
+
+Дай несколько наиболее вероятных объяснений.
 
 ⚠️ ЧТО НАСТОРАЖИВАЕТ
 
+Укажи возможные проблемные моменты.
+
 🎯 ЧТО ДЕЛАТЬ
+
+Дай конкретные действия.
 
 ✍️ ЧТО МОЖНО СКАЗАТЬ
 
+Если нужен разговор или сообщение,
+предложи конкретный вариант.
+
 Не выдавай предположения за факты.
 """
-
 
 RELATIONSHIP_PROMPT = """
 Пользователь рассказал о проблеме в отношениях.
@@ -557,13 +562,18 @@ RELATIONSHIP_PROMPT = """
 ✍️ ЧТО МОЖНО НАПИСАТЬ
 
 Давай конкретные рекомендации.
-"""
 
+Не ставь диагнозы.
+Не утверждай, что точно знаешь мысли
+другого человека.
+"""
 
 STRESS_PROMPT = """
 Пользователь рассказал о тревоге или стрессе.
 
 Ответь спокойно и практично.
+
+Используй:
 
 😰 ЧТО ПРОИСХОДИТ
 
@@ -576,296 +586,24 @@ STRESS_PROMPT = """
 Не ставь медицинских диагнозов.
 """
 
-
 # ============================================================
-# ГЛАВНОЕ МЕНЮ
+# GEMINI
 # ============================================================
 
-async def show_main_menu(update):
-
-    await update.message.reply_text(
-        "🧠 ПСИХОРАЗБОР\n\n"
-        "Выбирай нужный раздел 👇",
-
-        reply_markup=ReplyKeyboardMarkup(
-            keyboard,
-            resize_keyboard=True
-        )
+def ask_gemini(prompt):
+    response = gemini.interactions.create(
+        model=MODEL,
+        input=prompt
     )
 
+    answer = response.output_text
 
-# ============================================================
-# ПРОФИЛЬ
-# ============================================================
-
-async def start_profile(update):
-
-    user_id = update.effective_user.id
-
-    user_profile_steps[user_id] = "name"
-    profile_cache[user_id] = {}
-
-    await update.message.reply_text(
-        "👋 Давай сначала немного познакомимся.\n\n"
-        "Как тебя зовут?"
-    )
-
-
-async def show_profile(update):
-
-    user_id = update.effective_user.id
-
-    profile = get_user_profile(user_id)
-
-    if not profile_complete(profile):
-
-        await start_profile(update)
-        return
-
-    await update.message.reply_text(
-        "⚙️ ТВОЙ ПРОФИЛЬ\n\n"
-        f"👤 Имя: {profile.get('name')}\n"
-        f"🎂 Возраст: {profile.get('age')}\n"
-        f"🚻 Пол: {profile.get('gender')}\n\n"
-        "Профиль используется для персонализации "
-        "твоих разборов.",
-
-        reply_markup=ReplyKeyboardMarkup(
-            profile_keyboard,
-            resize_keyboard=True
-        )
-    )
-
-
-async def edit_profile(update):
-
-    user_id = update.effective_user.id
-
-    user_profile_steps[user_id] = "name"
-    profile_cache[user_id] = {}
-
-    await update.message.reply_text(
-        "✏️ Давай изменим профиль.\n\n"
-        "Как тебя зовут?"
-    )
-
-
-# ============================================================
-# ПРОФИЛЬ — ВВОД
-# ============================================================
-
-async def handle_profile_input(
-    update,
-    text
-):
-
-    user_id = update.effective_user.id
-    step = user_profile_steps.get(user_id)
-
-    if not step:
-        return False
-
-
-    if step == "name":
-
-        name = text.strip()
-
-        if len(name) < 2:
-
-            await update.message.reply_text(
-                "Напиши имя чуть подробнее 🙂"
-            )
-
-            return True
-
-        profile_cache[user_id] = {
-            "name": name
-        }
-
-        user_profile_steps[user_id] = "age"
-
-        await update.message.reply_text(
-            f"Приятно познакомиться, {name}! 👋\n\n"
-            "🎂 Сколько тебе лет?"
+    if not answer:
+        raise RuntimeError(
+            "Gemini вернул пустой ответ"
         )
 
-        return True
-
-
-    if step == "age":
-
-        try:
-            age = int(text.strip())
-        except ValueError:
-
-            await update.message.reply_text(
-                "Напиши возраст цифрами, например: 25"
-            )
-
-            return True
-
-        if age < 13 or age > 100:
-
-            await update.message.reply_text(
-                "Укажи возраст от 13 до 100 лет."
-            )
-
-            return True
-
-        profile_cache[user_id]["age"] = age
-
-        user_profile_steps[user_id] = "gender"
-
-        await update.message.reply_text(
-            "🚻 Укажи свой пол:",
-
-            reply_markup=ReplyKeyboardMarkup(
-                gender_keyboard,
-                resize_keyboard=True,
-                one_time_keyboard=True
-            )
-        )
-
-        return True
-
-
-    if step == "gender":
-
-        gender_map = {
-            "👨 Мужской": "мужской",
-            "👩 Женский": "женский",
-            "Не хочу указывать": "не указан",
-        }
-
-        gender = gender_map.get(text)
-
-        if not gender:
-
-            await update.message.reply_text(
-                "Выбери один из вариантов ниже 👇",
-
-                reply_markup=ReplyKeyboardMarkup(
-                    gender_keyboard,
-                    resize_keyboard=True
-                )
-            )
-
-            return True
-
-        profile_cache[user_id]["gender"] = gender
-
-        data = profile_cache[user_id]
-
-        try:
-
-            save_user_profile(
-                user_id,
-                data["name"],
-                data["age"],
-                data["gender"]
-            )
-
-        except Exception:
-
-            await update.message.reply_text(
-                "❌ Не удалось сохранить профиль."
-            )
-
-            return True
-
-        user_profile_steps.pop(
-            user_id,
-            None
-        )
-
-        profile_cache.pop(
-            user_id,
-            None
-        )
-
-        user_modes[user_id] = None
-
-        await update.message.reply_text(
-            "✅ Профиль сохранён!"
-        )
-
-        await show_main_menu(update)
-
-        return True
-
-    return False
-
-
-# ============================================================
-# ИСТОРИЯ
-# ============================================================
-
-def get_analysis_type_name(
-    analysis_type
-):
-
-    names = {
-        "chat": "💬 Разбор переписки",
-        "screenshot": "📸 Анализ скриншота",
-        "situation": "🧠 Разбор ситуации",
-        "relationship": "❤️ Отношения",
-        "stress": "😰 Тревога и стресс",
-    }
-
-    return names.get(
-        analysis_type,
-        "🧠 Анализ"
-    )
-
-
-async def show_history(update):
-
-    user_id = update.effective_user.id
-
-    history = get_analysis_history(user_id)
-
-    if not history:
-
-        await update.message.reply_text(
-            "📚 У тебя пока нет сохранённых разборов.\n\n"
-            "Сделай первый анализ — и он появится здесь."
-        )
-
-        return
-
-    await update.message.reply_text(
-        "📚 ТВОИ ПОСЛЕДНИЕ РАЗБОРЫ\n\n"
-        "Показываю последние 10."
-    )
-
-    for item in history:
-
-        analysis_type = get_analysis_type_name(
-            item.get("analysis_type")
-        )
-
-        created_at = item.get(
-            "created_at",
-            ""
-        )
-
-        result = item.get(
-            "result",
-            ""
-        )
-
-        if len(result) > 2500:
-            result = result[:2500] + "\n\n…"
-
-        message = (
-            f"{analysis_type}\n"
-            f"🕐 {created_at}\n\n"
-            f"{result}"
-        )
-
-        await update.message.reply_text(
-            clean_markdown(message)
-        )
+    return clean_markdown(answer)
 
 
 # ============================================================
@@ -876,40 +614,301 @@ async def start(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE
 ):
-
     user_id = update.effective_user.id
 
     user_modes[user_id] = None
 
-    profile = get_user_profile(user_id)
+    profile = get_profile(user_id)
 
-    if profile_complete(profile):
+    if not profile:
+        await update.message.reply_text(
+            "🧠 ПСИХОРАЗБОР\n\n"
+            "Привет! Давай сначала создадим твой профиль.\n\n"
+            "Как тебя зовут?"
+        )
 
-        await show_main_menu(update)
+        user_profile_state[user_id] = {
+            "step": PROFILE_NAME,
+            "name": None,
+            "age": None,
+            "gender": None,
+        }
 
         return
 
-    await start_profile(update)
+    await update.message.reply_text(
+        "🧠 ПСИХОРАЗБОР\n\n"
+        f"С возвращением, {profile.get('name', '')}! 👋\n\n"
+        "Выбирай нужный раздел 👇",
+        reply_markup=main_keyboard()
+    )
 
 
 # ============================================================
-# СКРИНШОТ
+# СОЗДАНИЕ ПРОФИЛЯ
+# ============================================================
+
+async def handle_profile(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+    user_id = update.effective_user.id
+    text = update.message.text.strip()
+
+    state = user_profile_state.get(user_id)
+
+    if not state:
+        return False
+
+    step = state["step"]
+
+    if step == PROFILE_NAME:
+
+        if len(text) < 2 or len(text) > 50:
+            await update.message.reply_text(
+                "Напиши имя от 2 до 50 символов."
+            )
+            return True
+
+        state["name"] = text
+        state["step"] = PROFILE_AGE
+
+        await update.message.reply_text(
+            "Отлично 👍\n\n"
+            "Сколько тебе лет?"
+        )
+
+        return True
+
+    if step == PROFILE_AGE:
+
+        if not text.isdigit():
+            await update.message.reply_text(
+                "Напиши возраст цифрами, например: 25"
+            )
+            return True
+
+        age = int(text)
+
+        if age < 13 or age > 100:
+            await update.message.reply_text(
+                "Укажи реальный возраст от 13 до 100 лет."
+            )
+            return True
+
+        state["age"] = age
+        state["step"] = PROFILE_GENDER
+
+        await update.message.reply_text(
+            "Теперь укажи пол 👇",
+            reply_markup=ReplyKeyboardMarkup(
+                PROFILE_GENDER_KEYBOARD,
+                resize_keyboard=True,
+                one_time_keyboard=True
+            )
+        )
+
+        return True
+
+    if step == PROFILE_GENDER:
+
+        if text == "👨 Мужчина":
+            gender = "male"
+
+        elif text == "👩 Женщина":
+            gender = "female"
+
+        else:
+            await update.message.reply_text(
+                "Выбери один из вариантов ниже 👇",
+                reply_markup=ReplyKeyboardMarkup(
+                    PROFILE_GENDER_KEYBOARD,
+                    resize_keyboard=True,
+                    one_time_keyboard=True
+                )
+            )
+            return True
+
+        state["gender"] = gender
+
+        success = save_profile(
+            user_id,
+            state["name"],
+            state["age"],
+            gender
+        )
+
+        user_profile_state.pop(user_id, None)
+
+        if not success:
+            await update.message.reply_text(
+                "❌ Не удалось сохранить профиль.\n\n"
+                "Проверь подключение Supabase."
+            )
+            return True
+
+        await update.message.reply_text(
+            "✅ Профиль сохранён!\n\n"
+            f"👤 Имя: {state['name']}\n"
+            f"🎂 Возраст: {state['age']}\n"
+            f"⚧ Пол: "
+            + (
+                "Мужчина"
+                if gender == "male"
+                else "Женщина"
+            )
+            + "\n\n"
+            "Теперь я смогу учитывать эти данные "
+            "при анализе переписок и ситуаций.",
+            reply_markup=main_keyboard()
+        )
+
+        return True
+
+    return False
+
+
+# ============================================================
+# МОЙ ПРОФИЛЬ
+# ============================================================
+
+async def profile_menu(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+    user_id = update.effective_user.id
+
+    profile = get_profile(user_id)
+
+    await update.message.reply_text(
+        profile_text(profile),
+        reply_markup=main_keyboard()
+    )
+
+
+# ============================================================
+# ИЗМЕНЕНИЕ ПРОФИЛЯ
+# ============================================================
+
+async def edit_profile(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+    user_id = update.effective_user.id
+
+    user_profile_state[user_id] = {
+        "step": PROFILE_NAME,
+        "name": None,
+        "age": None,
+        "gender": None,
+    }
+
+    await update.message.reply_text(
+        "✏️ Давай изменим твой профиль.\n\n"
+        "Как тебя зовут?"
+    )
+
+
+# ============================================================
+# МОИ РАЗБОРЫ
+# ============================================================
+
+async def my_analyses(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+    user_id = update.effective_user.id
+
+    try:
+        result = (
+            supabase
+            .table("analyses")
+            .select("*")
+            .eq("telegram_id", user_id)
+            .order("created_at", desc=True)
+            .limit(10)
+            .execute()
+        )
+
+        analyses = result.data or []
+
+        if not analyses:
+            await update.message.reply_text(
+                "📚 МОИ РАЗБОРЫ\n\n"
+                "У тебя пока нет сохранённых разборов.\n\n"
+                "Сделай первый анализ — и он появится здесь.",
+                reply_markup=main_keyboard()
+            )
+            return
+
+        text = (
+            "📚 МОИ РАЗБОРЫ\n\n"
+            f"Всего показано: {len(analyses)}\n\n"
+        )
+
+        for index, item in enumerate(
+            analyses,
+            start=1
+        ):
+
+            analysis_type = item.get(
+                "analysis_type",
+                "Разбор"
+            )
+
+            input_text = item.get(
+                "input_text",
+                ""
+            )
+
+            created_at = item.get(
+                "created_at",
+                ""
+            )
+
+            if len(input_text) > 120:
+                input_text = (
+                    input_text[:120]
+                    + "..."
+                )
+
+            text += (
+                f"{index}. {analysis_type}\n"
+                f"📝 {input_text}\n"
+                f"🕐 {created_at}\n\n"
+            )
+
+        await send_long_message(
+            update,
+            text
+        )
+
+    except Exception as e:
+
+        logging.exception(
+            "Ошибка получения истории"
+        )
+
+        await update.message.reply_text(
+            "❌ Не удалось получить историю.\n\n"
+            + str(e)[:1000]
+        )
+
+
+# ============================================================
+# АНАЛИЗ СКРИНШОТА
 # ============================================================
 
 async def handle_photo(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE
 ):
-
     user_id = update.effective_user.id
 
-    profile = get_user_profile(user_id)
-
-    if not profile_complete(profile):
-
-        await start_profile(update)
-
-        return
+    logging.info(
+        "Получен скриншот от пользователя %s",
+        user_id
+    )
 
     await update.message.reply_text(
         "📸 Получил скриншот.\n\n"
@@ -917,6 +916,7 @@ async def handle_photo(
     )
 
     try:
+        profile = get_profile(user_id)
 
         photo = update.message.photo[-1]
 
@@ -934,14 +934,14 @@ async def handle_photo(
 
         prompt = (
             SYSTEM_PROMPT
-            + get_profile_text(profile)
+            + "\n\n"
+            + profile_context(profile)
             + "\n\n"
             + SCREENSHOT_PROMPT
         )
 
-        response = client.interactions.create(
+        response = gemini.interactions.create(
             model=MODEL,
-
             input=[
                 {
                     "type": "text",
@@ -966,20 +966,15 @@ async def handle_photo(
 
         save_analysis(
             user_id,
-            "screenshot",
-            "[Скриншот переписки]",
+            "Анализ скриншота",
+            "Скриншот переписки",
             answer
         )
 
-        for i in range(
-            0,
-            len(answer),
-            4000
-        ):
-
-            await update.message.reply_text(
-                answer[i:i + 4000]
-            )
+        await send_long_message(
+            update,
+            answer
+        )
 
     except Exception as e:
 
@@ -994,107 +989,70 @@ async def handle_photo(
 
 
 # ============================================================
-# ТЕКСТ
+# ОБРАБОТКА ТЕКСТА
 # ============================================================
 
 async def handle_message(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE
 ):
-
     user_id = update.effective_user.id
     text = update.message.text.strip()
 
-
-    # ========================================================
+    # --------------------------------------------------------
     # ПРОФИЛЬ
-    # ========================================================
+    # --------------------------------------------------------
 
-    if user_id in user_profile_steps:
+    if user_id in user_profile_state:
 
-        await handle_profile_input(
+        handled = await handle_profile(
             update,
-            text
+            context
         )
 
-        return
+        if handled:
+            return
 
-
-    # ========================================================
-    # ПРОФИЛЬ
-    # ========================================================
-
-    if text == "⚙️ Мой профиль":
-
-        await show_profile(update)
-
-        return
-
-
-    if text == "✏️ Изменить профиль":
-
-        await edit_profile(update)
-
-        return
-
-
-    # ========================================================
-    # ИСТОРИЯ
-    # ========================================================
-
-    if text == "📚 Мои разборы":
-
-        await show_history(update)
-
-        return
-
-
-    # ========================================================
-    # ГЛАВНОЕ МЕНЮ
-    # ========================================================
-
-    if text == "⬅️ Главное меню":
-
-        user_modes[user_id] = None
-
-        await show_main_menu(update)
-
-        return
-
-
-    # ========================================================
+    # --------------------------------------------------------
     # РАЗБОР ПЕРЕПИСКИ
-    # ========================================================
+    # --------------------------------------------------------
 
     if text == "💬 Разбор переписки":
 
         user_modes[user_id] = "chat"
 
         await update.message.reply_text(
-            "💬 Пришли переписку целиком."
+            "💬 Пришли переписку целиком.\n\n"
+            "Можно просто скопировать сообщения "
+            "и отправить их сюда."
         )
 
         return
 
-
-    # ========================================================
-    # СКРИНШОТ
-    # ========================================================
+    # --------------------------------------------------------
+    # АНАЛИЗ СКРИНШОТА
+    # --------------------------------------------------------
 
     if text == "📸 Анализ скриншота":
 
         user_modes[user_id] = "screenshot"
 
         await update.message.reply_text(
-            "📸 Пришли скриншот переписки."
+            "📸 Пришли скриншот переписки.\n\n"
+            "Я попробую определить:\n\n"
+            "📊 интерес\n"
+            "💬 инициативу\n"
+            "🟢 признаки интереса\n"
+            "🔴 тревожные моменты\n"
+            "🎯 что делать\n"
+            "✍️ что написать"
         )
 
         return
 
-
-    # ========================================================
-    # СИТУАЦИЯ
-    # ========================================================
+    # --------------------------------------------------------
+    # РАЗБОР СИТУАЦИИ
+    # --------------------------------------------------------
 
     if text == "🧠 Разбор ситуации":
 
@@ -1106,10 +1064,9 @@ async def handle_message(
 
         return
 
-
-    # ========================================================
+    # --------------------------------------------------------
     # ОТНОШЕНИЯ
-    # ========================================================
+    # --------------------------------------------------------
 
     if text == "❤️ Отношения":
 
@@ -1122,98 +1079,126 @@ async def handle_message(
 
         return
 
-
-    # ========================================================
+    # --------------------------------------------------------
     # ТРЕВОГА
-    # ========================================================
+    # --------------------------------------------------------
 
     if text == "😰 Тревога и стресс":
 
         user_modes[user_id] = "stress"
 
         await update.message.reply_text(
-            "😰 Расскажи, что тебя беспокоит."
+            "😰 Расскажи, что тебя сейчас беспокоит."
         )
 
         return
 
-
-    # ========================================================
+    # --------------------------------------------------------
     # ТЕСТ
-    # ========================================================
+    # --------------------------------------------------------
 
     if text == "🧪 Психологический тест":
 
         await update.message.reply_text(
-            "🧪 Раздел тестов пока готовится."
+            "🧪 Раздел тестов пока готовится.\n\n"
+            "Скоро здесь появятся полноценные "
+            "психологические тесты."
         )
 
         return
 
+    # --------------------------------------------------------
+    # МОИ РАЗБОРЫ
+    # --------------------------------------------------------
 
-    # ========================================================
-    # РЕЖИМ
-    # ========================================================
+    if text == "📚 Мои разборы":
+
+        await my_analyses(
+            update,
+            context
+        )
+
+        return
+
+    # --------------------------------------------------------
+    # МОЙ ПРОФИЛЬ
+    # --------------------------------------------------------
+
+    if text == "⚙️ Мой профиль":
+
+        await profile_menu(
+            update,
+            context
+        )
+
+        return
+
+    # --------------------------------------------------------
+    # ЕСЛИ РЕЖИМ СКРИНШОТА
+    # --------------------------------------------------------
 
     mode = user_modes.get(user_id)
-
-    if not mode:
-
-        await update.message.reply_text(
-            "Выбери раздел в меню 👇"
-        )
-
-        return
-
 
     if mode == "screenshot":
 
         await update.message.reply_text(
-            "📸 Для этого режима отправь "
+            "📸 Для этого режима отправь именно "
             "скриншот или фотографию переписки."
         )
 
         return
 
+    # --------------------------------------------------------
+    # ЕСЛИ РЕЖИМ НЕ ВЫБРАН
+    # --------------------------------------------------------
 
-    # ========================================================
-    # ПРОФИЛЬ
-    # ========================================================
+    if not mode:
 
-    profile = get_user_profile(user_id)
-
-    if not profile_complete(profile):
-
-        await start_profile(update)
+        await update.message.reply_text(
+            "Выбери раздел в меню 👇",
+            reply_markup=main_keyboard()
+        )
 
         return
 
+    # --------------------------------------------------------
+    # ПОЛУЧАЕМ ПРОФИЛЬ
+    # --------------------------------------------------------
 
-    await update.message.reply_text(
-        "🧠 Анализирую..."
-    )
+    profile = get_profile(user_id)
 
-
-    # ========================================================
-    # ПРОМПТ
-    # ========================================================
+    # --------------------------------------------------------
+    # ВЫБИРАЕМ ПРОМПТ
+    # --------------------------------------------------------
 
     if mode == "chat":
+
         task = CHAT_PROMPT
+        analysis_type = "Разбор переписки"
 
     elif mode == "situation":
+
         task = SITUATION_PROMPT
+        analysis_type = "Разбор ситуации"
 
     elif mode == "relationship":
+
         task = RELATIONSHIP_PROMPT
+        analysis_type = "Отношения"
 
     else:
-        task = STRESS_PROMPT
 
+        task = STRESS_PROMPT
+        analysis_type = "Тревога и стресс"
+
+    # --------------------------------------------------------
+    # ФИНАЛЬНЫЙ PROMPT
+    # --------------------------------------------------------
 
     prompt = (
         SYSTEM_PROMPT
-        + get_profile_text(profile)
+        + "\n\n"
+        + profile_context(profile)
         + "\n\n"
         + task
         + "\n\n"
@@ -1221,54 +1206,29 @@ async def handle_message(
         + text
     )
 
-
-    # ========================================================
+    # --------------------------------------------------------
     # GEMINI
-    # ========================================================
+    # --------------------------------------------------------
+
+    await update.message.reply_text(
+        "🧠 Анализирую..."
+    )
 
     try:
 
-        response = client.interactions.create(
-            model=MODEL,
-            input=prompt
-        )
-
-        answer = response.output_text
-
-        if not answer:
-
-            raise RuntimeError(
-                "Gemini вернул пустой ответ"
-            )
-
-        answer = clean_markdown(answer)
-
-
-        # ====================================================
-        # СОХРАНЯЕМ В ИСТОРИЮ
-        # ====================================================
+        answer = ask_gemini(prompt)
 
         save_analysis(
             user_id,
-            mode,
+            analysis_type,
             text,
             answer
         )
 
-
-        # ====================================================
-        # ОТПРАВЛЯЕМ
-        # ====================================================
-
-        for i in range(
-            0,
-            len(answer),
-            4000
-        ):
-
-            await update.message.reply_text(
-                answer[i:i + 4000]
-            )
+        await send_long_message(
+            update,
+            answer
+        )
 
     except Exception as e:
 
@@ -1283,27 +1243,31 @@ async def handle_message(
 
 
 # ============================================================
-# PROFILE COMMAND
-# ============================================================
-
-async def profile_command(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE
-):
-
-    await show_profile(update)
-
-
-# ============================================================
-# HISTORY COMMAND
+# КОМАНДА HISTORY
 # ============================================================
 
 async def history_command(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE
 ):
+    await my_analyses(
+        update,
+        context
+    )
 
-    await show_history(update)
+
+# ============================================================
+# КОМАНДА PROFILE
+# ============================================================
+
+async def profile_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+    await profile_menu(
+        update,
+        context
+    )
 
 
 # ============================================================
@@ -1316,10 +1280,12 @@ def main():
         "🧠 ПСИХОРАЗБОР запускается..."
     )
 
-    app = Application.builder().token(
-        TELEGRAM_TOKEN
-    ).build()
-
+    app = (
+        Application
+        .builder()
+        .token(TELEGRAM_TOKEN)
+        .build()
+    )
 
     app.add_handler(
         CommandHandler(
@@ -1328,6 +1294,12 @@ def main():
         )
     )
 
+    app.add_handler(
+        CommandHandler(
+            "history",
+            history_command
+        )
+    )
 
     app.add_handler(
         CommandHandler(
@@ -1336,15 +1308,6 @@ def main():
         )
     )
 
-
-    app.add_handler(
-        CommandHandler(
-            "history",
-            history_command
-        )
-    )
-
-
     app.add_handler(
         MessageHandler(
             filters.PHOTO,
@@ -1352,14 +1315,12 @@ def main():
         )
     )
 
-
     app.add_handler(
         MessageHandler(
             filters.TEXT & ~filters.COMMAND,
             handle_message
         )
     )
-
 
     print(
         "🟢 ПСИХОРАЗБОР успешно запущен."
