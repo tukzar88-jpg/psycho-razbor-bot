@@ -57,8 +57,7 @@ supabase: Client = create_client(
     SUPABASE_KEY
 )
 
-MODEL = "gemini-3.6-flash"
-
+MODEL = "gemini-2.5-flash-lite"
 
 # ============================================================
 # МЕНЮ
