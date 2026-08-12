@@ -4,6 +4,7 @@ import base64
 import re
 
 from google import genai
+from supabase import create_client, Client
 
 from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import (
@@ -27,6 +28,10 @@ logging.basicConfig(
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_SECRET_KEY = os.getenv("SUPABASE_SECRET_KEY")
+
+
 if not TELEGRAM_TOKEN:
     raise RuntimeError(
         "TELEGRAM_BOT_TOKEN не задан в Railway"
@@ -37,12 +42,36 @@ if not GEMINI_API_KEY:
         "GEMINI_API_KEY не задан в Railway"
     )
 
+if not SUPABASE_URL:
+    raise RuntimeError(
+        "SUPABASE_URL не задан в Railway"
+    )
+
+if not SUPABASE_SECRET_KEY:
+    raise RuntimeError(
+        "SUPABASE_SECRET_KEY не задан в Railway"
+    )
+
+
+# ============================================================
+# GEMINI
+# ============================================================
 
 client = genai.Client(
     api_key=GEMINI_API_KEY
 )
 
 MODEL = "gemini-3.6-flash"
+
+
+# ============================================================
+# SUPABASE
+# ============================================================
+
+supabase: Client = create_client(
+    SUPABASE_URL,
+    SUPABASE_SECRET_KEY
+)
 
 
 # ============================================================
@@ -66,27 +95,108 @@ gender_keyboard = [
 
 
 # ============================================================
-# ДАННЫЕ ПОЛЬЗОВАТЕЛЕЙ
+# ВРЕМЕННЫЕ ДАННЫЕ
 # ============================================================
-
-# Профиль пользователя:
-# {
-#     user_id: {
-#         "name": "...",
-#         "age": "...",
-#         "gender": "..."
-#     }
-# }
-
-user_profiles = {}
-
 
 # Текущий режим пользователя
 user_modes = {}
 
-
 # Этап заполнения профиля
 user_profile_steps = {}
+
+
+# ============================================================
+# РАБОТА С SUPABASE
+# ============================================================
+
+def get_user_profile(user_id):
+    """
+    Получает профиль пользователя из Supabase.
+    """
+
+    try:
+        result = (
+            supabase
+            .table("users")
+            .select("telegram_id, name, age, gender")
+            .eq("telegram_id", user_id)
+            .maybe_single()
+            .execute()
+        )
+
+        if result.data:
+            return result.data
+
+        return None
+
+    except Exception:
+        logging.exception(
+            "Ошибка получения профиля %s",
+            user_id
+        )
+
+        return None
+
+
+def save_user_profile(
+    user_id,
+    name,
+    age,
+    gender
+):
+    """
+    Создаёт или обновляет профиль пользователя.
+    """
+
+    try:
+
+        data = {
+            "telegram_id": user_id,
+            "name": name,
+            "age": age,
+            "gender": gender
+        }
+
+        result = (
+            supabase
+            .table("users")
+            .upsert(
+                data,
+                on_conflict="telegram_id"
+            )
+            .execute()
+        )
+
+        logging.info(
+            "Профиль пользователя %s сохранён",
+            user_id
+        )
+
+        return result.data
+
+    except Exception:
+
+        logging.exception(
+            "Ошибка сохранения профиля %s",
+            user_id
+        )
+
+        raise
+
+
+def profile_complete(profile):
+    """
+    Проверяет, заполнен ли профиль.
+    """
+
+    if not profile:
+        return False
+
+    return (
+        bool(profile.get("name"))
+        and bool(profile.get("age"))
+        and bool(profile.get("gender"))
+    )
 
 
 # ============================================================
@@ -94,16 +204,16 @@ user_profile_steps = {}
 # ============================================================
 
 def clean_markdown(text):
-    """
-    Убирает Markdown-разметку Gemini,
-    чтобы Telegram показывал обычный красивый текст.
-    """
 
     if not text:
         return text
 
     # Жирный текст
-    text = re.sub(r"\*\*(.*?)\*\*", r"\1", text)
+    text = re.sub(
+        r"\*\*(.*?)\*\*",
+        r"\1",
+        text
+    )
 
     # Курсив
     text = re.sub(
@@ -113,9 +223,13 @@ def clean_markdown(text):
     )
 
     # Подчёркивание
-    text = re.sub(r"__(.*?)__", r"\1", text)
+    text = re.sub(
+        r"__(.*?)__",
+        r"\1",
+        text
+    )
 
-    # Заголовки
+    # Markdown-заголовки
     text = re.sub(
         r"(?m)^\s*#{1,6}\s*",
         "",
@@ -133,14 +247,14 @@ def clean_markdown(text):
     text = text.replace("```", "")
     text = text.replace("`", "")
 
-    # Убираем лишние пробелы перед переносами
+    # Лишние пробелы
     text = re.sub(
         r"[ \t]+\n",
         "\n",
         text
     )
 
-    # Максимум две пустые строки
+    # Не больше двух пустых строк
     text = re.sub(
         r"\n{3,}",
         "\n\n",
@@ -151,16 +265,10 @@ def clean_markdown(text):
 
 
 # ============================================================
-# ПРОФИЛЬ ПОЛЬЗОВАТЕЛЯ
+# ПРОФИЛЬ ДЛЯ GEMINI
 # ============================================================
 
-def get_profile_text(user_id):
-    """
-    Возвращает профиль пользователя
-    для передачи Gemini.
-    """
-
-    profile = user_profiles.get(user_id)
+def get_profile_text(profile):
 
     if not profile:
         return ""
@@ -175,27 +283,10 @@ def get_profile_text(user_id):
         f"Имя: {name}\n"
         f"Возраст: {age}\n"
         f"Пол: {gender}\n\n"
-        "Учитывай этот профиль при анализе ситуации. "
+        "Учитывай профиль пользователя при анализе. "
         "Не делай выводы только на основании пола или возраста. "
-        "Основывай анализ прежде всего на фактах и содержании "
-        "переписки.\n"
-    )
-
-
-def profile_complete(user_id):
-    """
-    Проверяет, заполнен ли профиль.
-    """
-
-    profile = user_profiles.get(user_id)
-
-    if not profile:
-        return False
-
-    return (
-        bool(profile.get("name"))
-        and bool(profile.get("age"))
-        and bool(profile.get("gender"))
+        "Основывай выводы прежде всего на содержании "
+        "переписки и описанной ситуации.\n"
     )
 
 
@@ -260,7 +351,7 @@ __
 
 
 # ============================================================
-# РАЗБОР ТЕКСТОВОЙ ПЕРЕПИСКИ
+# РАЗБОР ПЕРЕПИСКИ
 # ============================================================
 
 CHAT_PROMPT = """
@@ -481,13 +572,10 @@ STRESS_PROMPT = """
 
 
 # ============================================================
-# ПОКАЗ ГЛАВНОГО МЕНЮ
+# ГЛАВНОЕ МЕНЮ
 # ============================================================
 
 async def show_main_menu(update):
-    """
-    Показывает основное меню.
-    """
 
     await update.message.reply_text(
         "🧠 ПСИХОРАЗБОР\n\n"
@@ -503,13 +591,10 @@ async def show_main_menu(update):
 
 
 # ============================================================
-# НАЧАЛО ЗАПОЛНЕНИЯ ПРОФИЛЯ
+# НАЧАЛО ПРОФИЛЯ
 # ============================================================
 
 async def start_profile(update):
-    """
-    Запускает анкету пользователя.
-    """
 
     user_id = update.effective_user.id
 
@@ -535,7 +620,10 @@ async def start(
 
     user_modes[user_id] = None
 
-    if not profile_complete(user_id):
+    # Загружаем профиль из Supabase
+    profile = get_user_profile(user_id)
+
+    if not profile_complete(profile):
 
         await start_profile(update)
 
@@ -545,13 +633,10 @@ async def start(
 
 
 # ============================================================
-# МОЙ ПРОФИЛЬ
+# ИЗМЕНЕНИЕ ПРОФИЛЯ
 # ============================================================
 
 async def edit_profile(update):
-    """
-    Запускает повторное заполнение профиля.
-    """
 
     user_id = update.effective_user.id
 
@@ -605,13 +690,32 @@ async def handle_profile_input(
 
             return True
 
-        if user_id not in user_profiles:
 
-            user_profiles[user_id] = {}
+        # Создаём/обновляем временный профиль
+        old_profile = get_user_profile(user_id)
 
-        user_profiles[user_id]["name"] = name
+        if old_profile:
+            current_age = old_profile.get("age")
+            current_gender = old_profile.get("gender")
+        else:
+            current_age = None
+            current_gender = None
+
+
+        # Пока сохраняем только имя
+        # Остальные данные сохраним после заполнения
+        if user_id not in user_profile_steps:
+            user_profile_steps[user_id] = "name"
 
         user_profile_steps[user_id] = "age"
+
+        # Сохраняем имя временно в контексте
+        update_profile_cache = context_user_cache.get(user_id, {})
+        update_profile_cache["name"] = name
+        update_profile_cache["age"] = current_age
+        update_profile_cache["gender"] = current_gender
+        context_user_cache[user_id] = update_profile_cache
+
 
         await update.message.reply_text(
             f"Приятно познакомиться, {name}! 👋\n\n"
@@ -630,7 +734,6 @@ async def handle_profile_input(
         age_text = text.strip()
 
         try:
-
             age = int(age_text)
 
         except ValueError:
@@ -641,6 +744,7 @@ async def handle_profile_input(
 
             return True
 
+
         if age < 13 or age > 100:
 
             await update.message.reply_text(
@@ -649,9 +753,18 @@ async def handle_profile_input(
 
             return True
 
-        user_profiles[user_id]["age"] = age
+
+        profile_data = context_user_cache.get(
+            user_id,
+            {}
+        )
+
+        profile_data["age"] = age
+
+        context_user_cache[user_id] = profile_data
 
         user_profile_steps[user_id] = "gender"
+
 
         await update.message.reply_text(
             "🚻 Укажи свой пол:",
@@ -694,23 +807,78 @@ async def handle_profile_input(
 
             return True
 
-        user_profiles[user_id]["gender"] = gender
 
-        user_profile_steps.pop(user_id, None)
+        profile_data = context_user_cache.get(
+            user_id,
+            {}
+        )
+
+        profile_data["gender"] = gender
+
+        name = profile_data.get(
+            "name",
+            ""
+        )
+
+        age = profile_data.get(
+            "age"
+        )
+
+
+        # Сохраняем ВСЁ в Supabase
+        try:
+
+            save_user_profile(
+                user_id=user_id,
+                name=name,
+                age=age,
+                gender=gender
+            )
+
+        except Exception:
+
+            await update.message.reply_text(
+                "❌ Не удалось сохранить профиль.\n\n"
+                "Попробуй ещё раз через несколько секунд."
+            )
+
+            return True
+
+
+        user_profile_steps.pop(
+            user_id,
+            None
+        )
+
+        context_user_cache.pop(
+            user_id,
+            None
+        )
 
         user_modes[user_id] = None
 
+
         await update.message.reply_text(
-            "✅ Профиль заполнен!\n\n"
-            "Теперь я смогу учитывать твой возраст, "
-            "имя и пол при анализе переписок и ситуаций."
+            "✅ Профиль сохранён!\n\n"
+            "Теперь он будет храниться в базе, "
+            "поэтому после перезапуска бота "
+            "вводить данные заново не понадобится."
         )
+
 
         await show_main_menu(update)
 
         return True
 
+
     return False
+
+
+# ============================================================
+# ВРЕМЕННЫЙ КЭШ ПРОФИЛЯ
+# ============================================================
+
+context_user_cache = {}
 
 
 # ============================================================
@@ -724,8 +892,10 @@ async def handle_photo(
 
     user_id = update.effective_user.id
 
-    # Если профиль не заполнен
-    if not profile_complete(user_id):
+    profile = get_user_profile(user_id)
+
+
+    if not profile_complete(profile):
 
         await start_profile(update)
 
@@ -737,10 +907,12 @@ async def handle_photo(
         user_id
     )
 
+
     await update.message.reply_text(
         "📸 Получил скриншот.\n\n"
         "🧠 Читаю переписку и анализирую..."
     )
+
 
     try:
 
@@ -750,15 +922,19 @@ async def handle_photo(
             photo.file_id
         )
 
-        image_bytes = await telegram_file.download_as_bytearray()
+        image_bytes = (
+            await telegram_file.download_as_bytearray()
+        )
+
 
         image_b64 = base64.b64encode(
             bytes(image_bytes)
         ).decode("utf-8")
 
 
-        # Профиль пользователя
-        profile_text = get_profile_text(user_id)
+        profile_text = get_profile_text(
+            profile
+        )
 
 
         prompt = (
@@ -788,6 +964,7 @@ async def handle_photo(
 
         answer = response.output_text
 
+
         if not answer:
 
             raise RuntimeError(
@@ -795,11 +972,11 @@ async def handle_photo(
             )
 
 
-        # Убираем Markdown
-        answer = clean_markdown(answer)
+        answer = clean_markdown(
+            answer
+        )
 
 
-        # Telegram ограничивает длину сообщения
         for i in range(
             0,
             len(answer),
@@ -816,6 +993,7 @@ async def handle_photo(
         logging.exception(
             "Ошибка анализа скриншота"
         )
+
 
         await update.message.reply_text(
             "❌ Ошибка при анализе скриншота:\n\n"
@@ -838,7 +1016,7 @@ async def handle_message(
 
 
     # ========================================================
-    # СНАЧАЛА ПРОВЕРЯЕМ АНКЕТУ
+    # ПРОВЕРЯЕМ ПРОФИЛЬ
     # ========================================================
 
     if user_id in user_profile_steps:
@@ -852,7 +1030,7 @@ async def handle_message(
 
 
     # ========================================================
-    # ПРОФИЛЬ
+    # МОЙ ПРОФИЛЬ
     # ========================================================
 
     if text == "⚙️ Мой профиль":
@@ -966,7 +1144,10 @@ async def handle_message(
     # ПРОВЕРЯЕМ РЕЖИМ
     # ========================================================
 
-    mode = user_modes.get(user_id)
+    mode = user_modes.get(
+        user_id
+    )
+
 
     if not mode:
 
@@ -989,6 +1170,15 @@ async def handle_message(
         )
 
         return
+
+
+    # ========================================================
+    # ПОЛУЧАЕМ ПРОФИЛЬ
+    # ========================================================
+
+    profile = get_user_profile(
+        user_id
+    )
 
 
     # ========================================================
@@ -1025,7 +1215,9 @@ async def handle_message(
     # ПРОФИЛЬ
     # ========================================================
 
-    profile_text = get_profile_text(user_id)
+    profile_text = get_profile_text(
+        profile
+    )
 
 
     # ========================================================
@@ -1057,6 +1249,7 @@ async def handle_message(
 
         answer = response.output_text
 
+
         if not answer:
 
             raise RuntimeError(
@@ -1064,11 +1257,11 @@ async def handle_message(
             )
 
 
-        # Убираем Markdown
-        answer = clean_markdown(answer)
+        answer = clean_markdown(
+            answer
+        )
 
 
-        # Отправляем частями
         for i in range(
             0,
             len(answer),
@@ -1086,6 +1279,7 @@ async def handle_message(
             "Ошибка Gemini"
         )
 
+
         await update.message.reply_text(
             "❌ Ошибка Gemini:\n\n"
             + str(e)[:3000]
@@ -1093,7 +1287,7 @@ async def handle_message(
 
 
 # ============================================================
-# ОБРАБОТКА КОМАНДЫ /PROFILE
+# КОМАНДА /PROFILE
 # ============================================================
 
 async def profile_command(
@@ -1103,7 +1297,10 @@ async def profile_command(
 
     user_id = update.effective_user.id
 
-    profile = user_profiles.get(user_id)
+    profile = get_user_profile(
+        user_id
+    )
+
 
     if not profile:
 
@@ -1112,9 +1309,20 @@ async def profile_command(
         return
 
 
-    name = profile.get("name", "не указано")
-    age = profile.get("age", "не указано")
-    gender = profile.get("gender", "не указан")
+    name = profile.get(
+        "name",
+        "не указано"
+    )
+
+    age = profile.get(
+        "age",
+        "не указано"
+    )
+
+    gender = profile.get(
+        "gender",
+        "не указан"
+    )
 
 
     await update.message.reply_text(
@@ -1188,9 +1396,8 @@ def main():
 
 
 # ============================================================
-# ЗАПУСК ПРОГРАММЫ
+# START PROGRAM
 # ============================================================
 
 if __name__ == "__main__":
-
     main()
