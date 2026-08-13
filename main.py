@@ -30,7 +30,19 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+ADMIN_TELEGRAM_ID = os.getenv("ADMIN_TELEGRAM_ID")
 
+if not ADMIN_TELEGRAM_ID:
+    raise RuntimeError(
+        "ADMIN_TELEGRAM_ID не задан в Railway"
+    )
+
+try:
+    ADMIN_TELEGRAM_ID = int(ADMIN_TELEGRAM_ID)
+except ValueError:
+    raise RuntimeError(
+        "ADMIN_TELEGRAM_ID должен быть числом"
+    )
 if not TELEGRAM_TOKEN:
     raise RuntimeError("TELEGRAM_BOT_TOKEN не задан в Railway")
 
@@ -56,6 +68,50 @@ supabase: Client = create_client(
     SUPABASE_URL,
     SUPABASE_KEY
 )
+client = genai.Client(
+    api_key=GEMINI_API_KEY
+)
+
+supabase: Client = create_client(
+    SUPABASE_URL,
+    SUPABASE_KEY
+)
+
+
+# ============================================================
+# УВЕДОМЛЕНИЕ АДМИНУ ОБ ОШИБКАХ
+# ============================================================
+
+async def notify_admin(
+    context: ContextTypes.DEFAULT_TYPE,
+    title: str,
+    error: Exception,
+    user_id=None
+):
+
+    try:
+
+        error_text = str(error)
+
+        if len(error_text) > 2500:
+            error_text = error_text[:2500] + "..."
+
+        message = (
+            f"🚨 {title}\n\n"
+            f"Ошибка:\n{error_text}\n\n"
+            f"Пользователь: {user_id or 'неизвестен'}"
+        )
+
+        await context.bot.send_message(
+            chat_id=ADMIN_TELEGRAM_ID,
+            text=message
+        )
+
+    except Exception:
+
+        logging.exception(
+            "Не удалось отправить уведомление админу"
+        )
 
 MODEL = "gemini-3.5-flash-lite"
 # ============================================================
@@ -3368,7 +3424,30 @@ async def handle_message(
             + str(e)[:3000]
         )
 
+def main():
 
+    print(
+        "🧠 ПСИХОРАЗБОР запускается..."
+    )
+
+    app = (
+        Application
+        .builder()
+        .token(TELEGRAM_TOKEN)
+        .build()
+    )
+
+    app.add_error_handler(
+        error_handler
+    )
+
+    # /start
+    app.add_handler(
+        CommandHandler(
+            "start",
+            start
+     )
+    )
 # ============================================================
 # ЗАПУСК
 # ============================================================
